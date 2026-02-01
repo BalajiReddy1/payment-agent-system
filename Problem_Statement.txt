@@ -1,0 +1,24 @@
+Problem 2
+Agentic AI for Smart Payment Operations (Fintech)
+POV
+Hi, I'm Aryan, an operations manager at a fintech company that processes millions of online payments for merchants every day. 
+Payment failures don't just mean technical issues they mean lost revenue, abandoned carts, and broken trust. 
+Failures can happen for countless reasons: bank downtime, issuer throttling, network latency, retry misconfiguration, or payment method mismatches. 
+Today, my team discovers these issues after dashboards spike or merchants complain. By then, damage is already done. 
+I need a system that can reason about payment behavior in real time and actively intervene without introducing new risks.
+
+
+Problem Statement
+Design and build an agentic AI system that acts as a real-time payment operations manager. 
+The agent should continuously observe live payment signals, reason about emerging failure patterns, and make informed decisions to improve overall payment performance while balancing success rate, latency, cost, and risk. 
+At a minimum, your agent must demonstrate a complete observe → reason → decide → act → learn loop: 
+● Observe: Ingest streaming or simulated payment data such as transaction outcomes, retries, latency, payment methods, banks/issuers, and error codes 
+● Reason: Identify meaningful patterns (e.g., issuer-specific degradation, retry storms, method fatigue) and form hypotheses about root causes 
+● Decide: Choose if and how to intervene considering trade-offs between success rate, speed, processing cost, and potential user friction 
+● Act (with guardrails): Execute or recommend actions such as adjusting retry strategies, rerouting payments, temporarily suppressing failing paths, or alerting ops teams while respecting safety constraints 
+● Learn: Evaluate outcomes of past actions and update future decisions accordingly This is not a rules engine. The agent must make context-aware, explainable decisions under uncertainty. You must also define ethical and operational boundaries what the agent is allowed to change autonomously, when human approval is required, and how incorrect decisions are detected and rolled back.
+
+Expected Outcome (Code-First)
+Participants must submit a working, code-based agentic system with a publicly accessible Git repository. 
+The solution should include real agent logic (state, memory, tools, decision policies), not just a single LLM call or static heuristics. 
+Teams should clearly demonstrate how payment data is ingested, how decisions are made, how actions are executed or simulated, and how outcomes feed back into the agent's reasoning

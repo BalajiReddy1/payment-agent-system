@@ -230,7 +230,6 @@ authorization_levels:
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Detailed technical architecture
 - [QUICKSTART.md](QUICKSTART.md) - Getting started guide
 - [PERFORMANCE.md](PERFORMANCE.md) - Benchmarks and metrics
-- [SUBMISSION.md](SUBMISSION.md) - Hackathon submission details
 
 ## 🧑‍💻 Technology Stack
 

@@ -1,0 +1,41 @@
+# Docker ignore file
+# Reduces build context size
+
+# Virtual environment
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation (optional - can include if needed)
+# *.md
+
+# Test data (keep sample_payments for demo)
+# data/
+
+# Local env files
+.env
+.env.local

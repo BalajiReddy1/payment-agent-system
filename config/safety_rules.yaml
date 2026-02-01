@@ -1,0 +1,71 @@
+# Safety Rules Configuration
+# Defines guardrails and limits for autonomous agent actions
+
+# Impact Limits
+limits:
+  # Maximum percentage of traffic any single action can affect
+  max_traffic_impact_percent: 15
+  
+  # Maximum actions the agent can take per hour
+  max_actions_per_hour: 10
+  
+  # Maximum rollbacks allowed per hour before pausing
+  max_rollbacks_per_hour: 3
+  
+  # Maximum active interventions at once
+  max_concurrent_interventions: 5
+
+# Automatic Rollback Triggers
+rollback_triggers:
+  # Rollback if success rate drops by this amount
+  success_rate_drop: 0.05
+  
+  # Rollback if latency increases by this percentage
+  latency_increase_percent: 50
+  
+  # Rollback if error rate increases by this amount
+  error_rate_increase: 0.10
+  
+  # Rollback if cost per transaction increases by this percentage
+  cost_increase_percent: 20
+
+# Authorization Levels
+authorization:
+  # Actions that can run automatically
+  automatic:
+    - adjust_retry
+    - alert_ops
+  
+  # Actions requiring semi-automatic approval
+  semi_automatic:
+    - circuit_breaker
+    - route_change
+  
+  # Actions requiring manual approval
+  manual:
+    - method_suppress
+    - system_config_change
+
+# Human-in-the-Loop Requirements
+human_approval:
+  # Require approval for actions affecting more than this % of traffic
+  traffic_threshold_percent: 15
+  
+  # Require approval during business hours for high-risk actions
+  business_hours_check: true
+  business_hours_start: 9
+  business_hours_end: 18
+  
+  # Actions with historical failure rate above this require review
+  failure_rate_threshold: 0.30
+
+# Monitoring Thresholds
+monitoring:
+  # Alert if cycle time exceeds this (ms)
+  max_cycle_time_ms: 200
+  
+  # Alert if memory usage exceeds this (MB)
+  max_memory_mb: 256
+  
+  # Alert if pattern detection takes longer than this (ms)
+  max_pattern_detection_ms: 100

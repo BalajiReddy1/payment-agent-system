@@ -1,0 +1,49 @@
+# Agent Configuration
+# Controls the core behavior of the Payment Agent
+
+agent:
+  # Size of the sliding window for transaction analysis
+  window_size_minutes: 10
+  
+  # How often the agent runs a full analysis cycle
+  analysis_interval_seconds: 30
+  
+  # Automatically execute low-risk actions without approval
+  auto_approve_low_risk: true
+
+# Pattern Detection Thresholds
+thresholds:
+  # Minimum confidence to report a pattern
+  pattern_confidence: 0.7
+  
+  # Minimum score for an action to be considered
+  action_score_minimum: 0.5
+  
+  # Minimum failure rate increase to detect issuer degradation
+  issuer_degradation_threshold: 0.15
+  
+  # Retry rate above which a retry storm is detected
+  retry_storm_threshold: 0.25
+
+# Learning Parameters
+learning:
+  # How quickly weights are adjusted after outcomes
+  weight_adjustment_rate: 0.1
+  
+  # Minimum samples needed before updating weights
+  min_samples_for_update: 5
+  
+  # Decay factor for old outcomes
+  outcome_decay_factor: 0.95
+
+# Decision Weights (must sum to 1.0)
+decision_weights:
+  success_rate: 0.40
+  latency: 0.25
+  cost: 0.20
+  risk: 0.15
+
+# Logging
+logging:
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

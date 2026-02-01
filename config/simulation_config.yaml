@@ -1,0 +1,73 @@
+# Simulation Configuration
+# Parameters for the payment transaction simulator
+
+simulation:
+  # Base success rate for normal operation
+  base_success_rate: 0.95
+  
+  # Transactions per batch in demo mode
+  transactions_per_batch: 25
+  
+  # Base retry rate (percentage of transactions that are retries)
+  base_retry_rate: 0.05
+
+# Available Issuers
+issuers:
+  - HDFC_BANK
+  - ICICI_BANK
+  - SBI
+  - AXIS_BANK
+  - KOTAK_BANK
+  - YES_BANK
+  - PAYTM_BANK
+  - RAZORPAY
+
+# Payment Methods with Weights
+payment_methods:
+  CREDIT_CARD: 0.35
+  DEBIT_CARD: 0.30
+  UPI: 0.25
+  NET_BANKING: 0.07
+  WALLET: 0.03
+
+# Regions
+regions:
+  - NORTH
+  - SOUTH
+  - EAST
+  - WEST
+  - CENTRAL
+
+# Error Codes
+error_codes:
+  - INSUFFICIENT_FUNDS
+  - INVALID_CARD
+  - TIMEOUT
+  - ISSUER_DOWN
+  - NETWORK_ERROR
+  - DECLINED
+  - EXPIRED_CARD
+  - FRAUD_SUSPECTED
+
+# Latency Configuration (milliseconds)
+latency:
+  base_ms: 200
+  std_dev_ms: 50
+  min_ms: 10
+
+# Failure Scenario Defaults
+scenarios:
+  issuer_degradation:
+    default_severity: 0.6
+    default_duration_seconds: 120
+  
+  retry_storm:
+    default_duration_seconds: 180
+  
+  latency_spike:
+    default_multiplier: 3.0
+    default_duration_seconds: 90
+  
+  geographic_failure:
+    default_severity: 0.5
+    default_duration_seconds: 120
