@@ -17,6 +17,8 @@ import streamlit as st
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+from adk_agent import analyze_and_act
+from payment_tools import executor as shared_executor, agent_state as shared_state
 from dashboard.components import (
     render_decision_log_entry,
     render_empty_state,
@@ -51,6 +53,9 @@ def init_session_state():
             analysis_interval_seconds=10,
             auto_approve_low_risk=True
         )
+        # Force unified state
+        st.session_state.agent.executor = shared_executor
+        st.session_state.agent.state = shared_state
     
     if 'simulator' not in st.session_state:
         st.session_state.simulator = PaymentSimulator(base_success_rate=0.95)
@@ -63,6 +68,9 @@ def init_session_state():
     
     if 'safety' not in st.session_state:
         st.session_state.safety = SafetyGuardrails(SafetyLimits())
+        
+    if 'agent_result' not in st.session_state:
+        st.session_state.agent_result = None
 
 
 def run_agent_cycle():
@@ -303,16 +311,18 @@ def render_explainability(results: dict):
     # Show pattern detection reasoning
     if patterns:
         for pattern in patterns[:2]:  # Show max 2
+            pattern_type = pattern.get('type', pattern.get('pattern_type', 'Unknown'))
+            affected = pattern.get('affected', pattern.get('affected_value', 'Unknown'))
             st.markdown(f"""
             <div style='background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); 
                         border-radius: 10px; padding: 15px; border: 1px solid #ffc107;
                         margin-bottom: 10px;'>
                 <div style='color: #ffc107; font-weight: bold; margin-bottom: 8px;'>
-                    🔍 Pattern Detected: {pattern.get('pattern_type', 'Unknown')}
+                    🔍 Pattern Detected: {pattern_type.replace('_', ' ').title()}
                 </div>
                 <div style='color: #8888aa; font-size: 0.9rem;'>
                     <b>Why detected:</b> Severity {pattern.get('severity', 0):.0%} exceeds threshold<br>
-                    <b>Affected:</b> {', '.join(pattern.get('affected_entities', ['Unknown']))[:50]}<br>
+                    <b>Affected:</b> {affected}<br>
                     <b>Confidence:</b> {pattern.get('confidence', 0):.0%}
                 </div>
             </div>
@@ -321,12 +331,13 @@ def render_explainability(results: dict):
     # Show action reasoning
     if actions:
         for action in actions[:2]:  # Show max 2
+            action_type = action.get('type', action.get('action_type', 'Unknown'))
             st.markdown(f"""
             <div style='background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); 
                         border-radius: 10px; padding: 15px; border: 1px solid #00d26a;
                         margin-bottom: 10px;'>
                 <div style='color: #00d26a; font-weight: bold; margin-bottom: 8px;'>
-                    ⚡ Action Taken: {action.get('action_type', 'Unknown')}
+                    ⚡ Action Taken: {action_type.replace('_', ' ').title()}
                 </div>
                 <div style='color: #8888aa; font-size: 0.9rem;'>
                     <b>Target:</b> {action.get('target', 'System')}<br>
@@ -552,29 +563,33 @@ def render_safety_guardrails():
 
 
 def render_decision_log(results: dict):
-    """Render the decision log section."""
-    st.markdown("#### 📜 Recent Decisions")
+    """Render the decision log section with Gemini integration."""
+    st.markdown("#### 📜 Recent Decisions (inc. 🤖 Gemini-led)")
     
-    actions = results.get('actions_taken', [])
+    # Unified log from the shared executor
+    all_logs = shared_executor.get_execution_history(limit=10)
     
-    if actions:
-        for i, action in enumerate(actions[:5]):
-            render_decision_log_entry(action, i)
+    if all_logs:
+        # Reverse to show newest first
+        for i, log in enumerate(reversed(all_logs)):
+            # Add a small visual tag if it was a Gemini-led action
+            is_gemini = "Gemini" in log.get('reasoning', '') or "MCP" in log.get('reasoning', '')
+            tag = " 🤖 <span style='color: #00d26a; font-size: 0.8rem;'>GEMINI AGENT</span>" if is_gemini else ""
+            
+            with st.expander(f"Action: {log['action_type'].replace('_', ' ').title()} - {log['target']}{tag}", expanded=(i == 0)):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Status:** {'✅ Success' if log['success'] else '❌ Failed'}")
+                    st.write(f"**Time:** {log['executed_at']}")
+                with col2:
+                    st.write(f"**Message:** {log['message']}")
+                st.write(f"**Parameters:** `{log['parameters']}`")
     else:
-        history = st.session_state.cycle_history
-        all_actions = []
-        for h in reversed(history[-5:]):
-            all_actions.extend(h['results'].get('actions_taken', []))
-        
-        if all_actions:
-            for i, action in enumerate(all_actions[:5]):
-                render_decision_log_entry(action, i)
-        else:
-            st.markdown(
-                "<div style='color: #666688; text-align: center; padding: 20px;'>"
-                "No recent decisions</div>",
-                unsafe_allow_html=True
-            )
+        st.markdown(
+            "<div style='color: #666688; text-align: center; padding: 20px;'>"
+            "No recorded decisions in this session</div>",
+            unsafe_allow_html=True
+        )
 
 
 def main():
@@ -583,6 +598,41 @@ def main():
     
     # Header
     render_header(st.session_state.agent.state.is_active)
+    
+    # --- Agentic Reasoning Section ---
+    st.divider()
+    st.header("🧠 Agentic Reasoning (Gemini + MCP)")
+    scenario_text = st.text_area("Simulated Scenario:", value="ALERT: ICICI Bank success rate dropped to 70%")
+    
+    col_a, col_b = st.columns([1, 5])
+    with col_a:
+        deploy_clicked = st.button("Deploy AI Agent", type="primary", use_container_width=True)
+    with col_b:
+        if st.button("Clear Analysis", use_container_width=True):
+            st.session_state.agent_result = None
+            st.rerun()
+
+    if deploy_clicked:
+        with st.spinner("Gemini is analyzing and deploying tools..."):
+            result = analyze_and_act(scenario_text)
+            st.session_state.agent_result = result
+            st.rerun() # Force a rerun to show the state-stored result immediately
+            
+    # Display the persisted result if it exists
+    if st.session_state.agent_result:
+        res = st.session_state.agent_result
+        
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.info(f"**Gemini reasoning:**\n\n{res.get('agent_reasoning')}")
+        with c2:
+            if res.get("tool_called"):
+                st.success(f"🛠️ **Tool Deployed:**\n\n`{res.get('tool_called')}`")
+                with st.expander("Tool Output Details"):
+                    st.code(res.get("tool_result"))
+    
+    # Update global state in agent for frontend consistency
+    st.session_state.agent.state = shared_state
     
     # Sidebar
     render_sidebar()
