@@ -1,69 +1,115 @@
 # 🏦 Agentic AI for Smart Payment Operations
 
-An intelligent, autonomous payment operations agent that monitors real-time payment transactions, identifies failure patterns, makes context-aware decisions, and executes interventions with full explainability and safety guardrails.
+An intelligent, autonomous payment operations system that monitors real-time payment transactions, detects failure patterns, reasons about root causes, and executes corrective interventions — powered by **Google Gemini 2.5 Flash** with native function-calling and a full **Model Context Protocol (MCP)** tool layer.
+
+---
 
 ## 🎯 Problem Statement
 
 Payment failures cost fintech companies millions in lost revenue. Traditional rule-based systems react too slowly and can't handle the complexity of modern payment ecosystems with hundreds of banks, issuers, payment methods, and failure modes.
 
 This **agentic AI system** acts as a real-time payment operations manager that:
-- ✅ Continuously observes payment signals
+- ✅ Continuously observes payment signals across issuers, methods, and geographies
 - ✅ Reasons about emerging patterns with hypothesis generation
-- ✅ Makes informed decisions under uncertainty
-- ✅ Takes autonomous action within safety guardrails
+- ✅ Deploys a **Gemini 2.5 Flash** LLM brain for autonomous decision-making
+- ✅ Executes real-time interventions via native function-calling
+- ✅ Maintains safety guardrails with 3-tier authorization and auto-rollback
 - ✅ Learns from outcomes to improve future decisions
-- ✅ Explains its reasoning at any point
+- ✅ Explains every decision with full audit trail
+
+---
 
 ## 🏗️ Architecture
 
+The system follows a **"Brain + Hands"** architecture:
+
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                   Payment Agent System                          │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│   OBSERVE ──▶ REASON ──▶ DECIDE ──▶ ACT ──▶ LEARN              │
-│      │          │          │         │        │                 │
-│      ▼          ▼          ▼         ▼        ▼                 │
-│   Observer   Reasoner   Decision  Executor  Learner             │
-│   .py        .py        Maker.py   .py       .py                │
-│                                                                 │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │              Safety Module (src/safety/)                │   │
-│   │   • Guardrails (authorization levels)                   │   │
-│   │   • Rollback (automatic reversion)                      │   │
-│   │   • Audit (decision trail)                              │   │
-│   └─────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      Payment Agent System                                │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   ┌─────────────────────┐      ┌──────────────────────────────────────┐  │
+│   │  🧠 THE BRAIN       │      │  🤚 THE HANDS                       │  │
+│   │  (adk_agent.py)     │      │  (payment_tools.py)                 │  │
+│   │                     │      │                                     │  │
+│   │  Gemini 2.5 Flash   │─────▶│  execute_circuit_breaker()          │  │
+│   │  + System Prompt    │      │  adjust_retry_strategy()            │  │
+│   │  + Native Function  │      │  change_routing()                   │  │
+│   │    Calling (ADK)    │◀─────│  suppress_payment_method()          │  │
+│   │                     │      │  alert_ops_team()                   │  │
+│   └─────────────────────┘      │  monitor_and_rollback()             │  │
+│            │                   │  get_agent_state()                  │  │
+│            │                   └──────────────┬───────────────────────┘  │
+│            │                                  │                          │
+│   ┌────────▼──────────────────────────────────▼──────────────────────┐   │
+│   │                OBSERVE → REASON → DECIDE → ACT → LEARN          │   │
+│   │                                                                  │   │
+│   │   Observer    Reasoner    Decision     Executor     Learner      │   │
+│   │   .py         .py        Maker.py     .py          .py          │   │
+│   └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│   ┌──────────────────────────────────────────────────────────────────┐   │
+│   │              🛡️ Safety Module (src/safety/)                      │   │
+│   │   • Guardrails (3-tier authorization)                            │   │
+│   │   • Rollback (automatic reversion on degradation)                │   │
+│   │   • Audit (immutable decision trail)                             │   │
+│   └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│   ┌──────────────────────────────────────────────────────────────────┐   │
+│   │              🖥️ MCP Server (mcp_server.py)                       │   │
+│   │   • Same tools exposed via Model Context Protocol                │   │
+│   │   • Supports stdio transport for multi-process setups            │   │
+│   └──────────────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
+
+### How the Gemini Agent Works
+
+1. **User submits a scenario** (e.g., *"ICICI Bank success rate dropped to 70%"*) via the Streamlit dashboard.
+2. **`adk_agent.py`** sends the scenario to **Gemini 2.5 Flash** along with all 7 tool function signatures.
+3. Gemini **reasons** about the situation and decides which tool(s) to call.
+4. The SDK **automatically dispatches** the function call to `payment_tools.py`.
+5. The tool executes the action through `PaymentExecutor` with full safety checks.
+6. The result flows back to Gemini, which provides a **natural language summary** of what it did and why.
+7. The dashboard displays reasoning, actions, and the **unified audit trail**.
+
+---
 
 ## ✨ Key Features
 
-### 1. Real-time Pattern Detection
-- Issuer degradation detection
-- Retry storm identification
+### 1. 🧠 LLM-Powered Autonomous Agent (Google Gemini 2.5 Flash)
+- Natural language understanding of complex payment failure scenarios
+- Autonomous reasoning and multi-step tool orchestration
+- Native function-calling — no prompt hacking or JSON parsing
+- Persistent reasoning display with unified state management
+
+### 2. 🔍 Real-Time Pattern Detection
+- Issuer degradation detection (e.g., HDFC Bank, ICICI Bank failures)
+- Retry storm identification and suppression
 - Payment method fatigue analysis
 - Latency spike detection
-- Multi-dimensional anomaly detection
+- Multi-dimensional anomaly scoring
 
-### 2. Context-Aware Decision Making
+### 3. 🎯 Context-Aware Decision Making
 - Multi-objective optimization (success rate, latency, cost, risk)
 - Hypothesis generation with confidence scoring
 - Trade-off analysis with full explainability
 
-### 3. Safety Guardrails (3 Authorization Levels)
+### 4. 🛡️ Safety Guardrails (3 Authorization Levels)
+
 | Level | Actions | Human Approval |
 |-------|---------|----------------|
 | **AUTOMATIC** | Retry tuning, Alerts | ❌ Not required |
 | **SEMI-AUTO** | Circuit breaker, Routing | ⚡ Quick approval |
 | **MANUAL** | Method suppression | ✅ Required |
 
-### 4. Automatic Rollback
+### 5. 🔄 Automatic Rollback
 If an action causes harm, the system automatically rolls back:
 - Success rate drops > 5% → Rollback
 - Latency increases > 50% → Rollback
 - Error rate increases > 10% → Rollback
 
-### 5. Decision Explainability
+### 6. 📖 Decision Explainability
 Every decision includes:
 - **Context**: What data triggered the analysis
 - **Reasoning**: Why this pattern is significant
@@ -71,54 +117,73 @@ Every decision includes:
 - **Decision**: What was chosen and why
 - **Expected Impact**: Predicted outcomes
 
-### 6. Continuous Learning
+### 7. 📚 Continuous Learning
 - Updates action weights based on outcomes
 - Tracks pattern detection accuracy
 - Refines decision strategies over time
+
+### 8. 🌐 MCP Server (Model Context Protocol)
+- All tools are also available as an MCP-compliant server (`mcp_server.py`)
+- Supports `stdio` transport for integration with external AI agents
+- Compatible with any MCP client (Claude Desktop, custom agents, etc.)
+
+---
 
 ## 📁 Project Structure
 
 ```
 payment-agent-system/
+├── adk_agent.py                  # 🧠 Gemini 2.5 Flash agent (The Brain)
+├── payment_tools.py              # 🤚 Tool functions for Gemini (The Hands)
+├── mcp_server.py                 # 🌐 MCP server (tools via stdio)
+├── main.py                       # CLI demo runner
 ├── src/
 │   ├── agent/
-│   │   ├── core.py              # Main agent orchestrator
-│   │   ├── observer.py          # Data ingestion & statistics
-│   │   ├── reasoner.py          # Pattern detection & hypotheses
-│   │   ├── decision_maker.py    # Multi-objective decision engine
-│   │   ├── executor.py          # Action execution with guardrails
-│   │   └── learner.py           # Learning from outcomes
+│   │   ├── core.py               # Main agent orchestrator (OBSERVE→REASON→DECIDE→ACT→LEARN)
+│   │   ├── observer.py           # Data ingestion & sliding-window statistics
+│   │   ├── reasoner.py           # Pattern detection & hypothesis generation
+│   │   ├── decision_maker.py     # Multi-objective decision engine
+│   │   ├── executor.py           # Action execution with safety guardrails
+│   │   └── learner.py            # Reinforcement learning from outcomes
 │   ├── models/
-│   │   └── state.py             # Agent state & memory management
+│   │   └── state.py              # Agent state, memory & data models
 │   ├── safety/
-│   │   ├── guardrails.py        # Authorization levels & limits
-│   │   ├── rollback.py          # Automatic rollback logic
-│   │   └── audit.py             # Decision audit trail
+│   │   ├── guardrails.py         # 3-tier authorization levels & limits
+│   │   ├── rollback.py           # Automatic rollback on degradation
+│   │   └── audit.py              # Immutable decision audit trail
 │   ├── simulation/
-│   │   └── payment_simulator.py # Transaction & failure simulation
+│   │   └── payment_simulator.py  # Transaction & failure scenario simulation
 │   └── utils/
-│       ├── benchmark.py         # Performance benchmarking
-│       └── config_loader.py     # YAML config loader
+│       ├── benchmark.py          # Performance benchmarking
+│       └── config_loader.py      # YAML configuration loader
 ├── api/
-│   └── main.py                  # FastAPI REST endpoints
+│   └── main.py                   # FastAPI REST endpoints
 ├── dashboard/
-│   ├── app.py                   # Streamlit dashboard
-│   ├── components.py            # UI components
-│   └── styles.py                # Dark theme CSS
+│   ├── app.py                    # Streamlit real-time command center
+│   ├── components.py             # Reusable UI components
+│   └── styles.py                 # Dark theme CSS
 ├── config/
-│   ├── agent_config.yaml        # Agent behavior settings
-│   ├── safety_rules.yaml        # Safety guardrails config
-│   └── simulation_config.yaml   # Simulator parameters
+│   ├── agent_config.yaml         # Agent behavior thresholds
+│   ├── safety_rules.yaml         # Safety guardrail configuration
+│   └── simulation_config.yaml    # Simulator parameters
 ├── data/
-│   ├── sample_payments.json     # Sample transaction data
-│   └── sample_payments.csv      # CSV format
-├── Dockerfile                   # Container image
-├── docker-compose.yml           # Multi-service orchestration
-├── requirements.txt             # Python dependencies
-└── README.md
+│   ├── sample_payments.json      # Sample transaction data
+│   └── sample_payments.csv       # CSV format
+├── Dockerfile                    # Production container (Cloud Run ready)
+├── docker-compose.yml            # Multi-service local orchestration
+├── requirements.txt              # Python dependencies
+├── ARCHITECTURE.md               # Detailed technical architecture
+├── QUICKSTART.md                 # Getting started guide
+└── PERFORMANCE.md                # Benchmarks and metrics
 ```
 
+---
+
 ## 🚀 Quick Start
+
+### Prerequisites
+- Python 3.11+
+- A [Google Gemini API key](https://aistudio.google.com/apikey)
 
 ### Option 1: Local Development
 
@@ -126,45 +191,72 @@ payment-agent-system/
 # Clone and setup
 cd payment-agent-system
 python -m venv venv
-.\venv\Scripts\activate  # Windows
+.\venv\Scripts\activate        # Windows
+# source venv/bin/activate     # macOS/Linux
 pip install -r requirements.txt
 
-# Run the Dashboard
+# Set your Gemini API key
+set GEMINI_API_KEY=your_key_here          # Windows CMD
+# export GEMINI_API_KEY=your_key_here     # macOS/Linux
+
+# Run the Dashboard (includes Gemini Agent)
 streamlit run dashboard/app.py
 
-# Run the API (separate terminal)
-uvicorn api.main:app --reload
-
-# Run Demo Mode
+# Run the CLI Demo (rule-based loop)
 python main.py --mode demo
+
+# Run the REST API (separate terminal)
+uvicorn api.main:app --reload
 ```
 
 ### Option 2: Docker
 
 ```bash
-# Start all services
+# Start all services (Dashboard + API)
 docker-compose up --build
 
 # Access:
 # Dashboard: http://localhost:8501
-# API: http://localhost:8000
-# API Docs: http://localhost:8000/docs
+# API:       http://localhost:8000
+# API Docs:  http://localhost:8000/docs
 ```
+
+### Option 3: Google Cloud Run
+
+```bash
+# Set your GCP project
+gcloud config set project YOUR_PROJECT_ID
+
+# Deploy (builds container automatically)
+gcloud run deploy payment-agent \
+  --source . \
+  --platform managed \
+  --region asia-south1 \
+  --allow-unauthenticated \
+  --set-env-vars GEMINI_API_KEY=YOUR_GEMINI_API_KEY
+```
+
+---
 
 ## 📊 Dashboard Features
 
+The Streamlit Command Center provides a unified real-time view of the entire payment system:
+
 | Panel | Description |
 |-------|-------------|
-| **KPI Cards** | Success rate, latency, transactions, actions |
-| **Health Gauge** | Real-time system health (0-100) |
-| **Explainability** | WHY patterns detected, WHAT actions taken |
-| **Trend Charts** | Success rate & latency over time |
-| **Issuer Health** | Per-issuer success rates (color-coded) |
-| **Patterns** | Detected anomalies with confidence |
-| **Interventions** | Active agent interventions |
-| **Safety Guardrails** | Authorization levels & limits |
-| **Decision Log** | Recent agent decisions |
-| **Scenario Injection** | Simulate failures (sidebar) |
+| **🧠 Agentic Reasoning** | Deploy Gemini agent with custom scenarios; persisted results |
+| **💰 KPI Cards** | Success rate, latency, transactions, agent actions |
+| **🎯 Health Gauge** | Real-time system health score (0–100) |
+| **🧠 Explainability** | WHY patterns were detected, WHAT actions were taken |
+| **📈 Trend Charts** | Success rate & latency trends over time |
+| **🏦 Issuer Health** | Per-issuer success rates (color-coded bar chart) |
+| **🔍 Patterns** | Detected anomalies with severity & confidence |
+| **🛡️ Interventions** | Active agent interventions (unified with Gemini) |
+| **🛡️ Safety Guardrails** | Authorization levels, limits & rollback triggers |
+| **📜 Decision Log** | Unified audit trail with 🤖 Gemini-led tags |
+| **🔥 Scenario Injection** | Simulate issuer failures, retry storms, latency spikes |
+
+---
 
 ## 🔌 API Endpoints
 
@@ -173,10 +265,12 @@ docker-compose up --build
 | `/health` | GET | Health check |
 | `/status` | GET | Agent status & metrics |
 | `/cycle` | POST | Trigger analysis cycle |
-| `/transactions` | POST | Submit transactions |
+| `/transactions` | POST | Submit transactions for processing |
 | `/scenarios/inject` | POST | Inject failure scenario |
 | `/scenarios/clear` | DELETE | Clear active scenarios |
 | `/scenarios` | GET | List active scenarios |
+
+---
 
 ## ⚙️ Configuration
 
@@ -203,6 +297,8 @@ authorization_levels:
   manual: [method_suppress]
 ```
 
+---
+
 ## 📈 Performance
 
 | Metric | Value |
@@ -212,34 +308,49 @@ authorization_levels:
 | Pattern Detection | ~5ms |
 | Memory (Peak) | ~45 MB |
 
+---
+
 ## 🛡️ Why This is Truly Agentic
 
 | Agentic Trait | Implementation |
 |---------------|----------------|
-| **Autonomy** | Auto-executes low-risk actions |
-| **State/Memory** | `AgentState`, `AgentMemory` |
-| **Goal-Directed** | Multi-objective optimization |
-| **Reasoning** | Hypothesis generation |
-| **Tool Use** | Circuit breakers, routing, retries |
-| **Learning** | Weight updates from outcomes |
-| **Explainability** | Full decision trails |
-| **Safety** | 3-tier authorization, auto-rollback |
+| **Autonomy** | Auto-executes low-risk actions; Gemini reasons and acts independently |
+| **State/Memory** | `AgentState`, `AgentMemory` — unified across UI and LLM |
+| **Goal-Directed** | Multi-objective optimization (success rate, latency, cost, risk) |
+| **Reasoning** | Gemini 2.5 Flash with structured hypothesis generation |
+| **Tool Use** | Native function-calling: circuit breakers, routing, retries, alerts |
+| **Learning** | Weight updates from action outcomes; strategy refinement |
+| **Explainability** | Full decision audit trail with 🤖 Gemini-tagged entries |
+| **Safety** | 3-tier authorization, automatic rollback, rate limiting |
+| **MCP Compliance** | Tools exposed via Model Context Protocol for interoperability |
 
-## 📄 Documentation
-
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Detailed technical architecture
-- [QUICKSTART.md](QUICKSTART.md) - Getting started guide
-- [PERFORMANCE.md](PERFORMANCE.md) - Benchmarks and metrics
+---
 
 ## 🧑‍💻 Technology Stack
 
-- **Python 3.11** - Core agent logic
-- **Streamlit** - Real-time dashboard
-- **FastAPI** - REST API
-- **Plotly** - Interactive visualizations
-- **Docker** - Containerization
-- **YAML** - Configuration management
+| Layer | Technology |
+|-------|------------|
+| **LLM Brain** | Google Gemini 2.5 Flash (via `google-genai` SDK) |
+| **Tool Protocol** | Model Context Protocol (MCP) with `FastMCP` |
+| **Agent Framework** | Custom OBSERVE→REASON→DECIDE→ACT→LEARN loop |
+| **Frontend** | Streamlit (real-time dark-themed dashboard) |
+| **REST API** | FastAPI with Pydantic validation |
+| **Visualization** | Plotly (interactive gauges, charts, bar graphs) |
+| **Containerization** | Docker + Docker Compose |
+| **Cloud Deployment** | Google Cloud Run |
+| **Language** | Python 3.11 |
+| **Configuration** | YAML |
+
+---
+
+## 📄 Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Detailed technical architecture
+- [QUICKSTART.md](QUICKSTART.md) — Getting started guide
+- [PERFORMANCE.md](PERFORMANCE.md) — Benchmarks and metrics
+
+---
 
 ## 📝 License
 
-MIT License - See LICENSE file for details.
+MIT License — See LICENSE file for details.
