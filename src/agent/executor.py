@@ -280,7 +280,8 @@ class PaymentExecutor:
             'message': message,
             'baseline_metrics': baseline_metrics,
             'estimated_impact': action.estimated_impact,
-            'parameters': action.parameters
+            'parameters': action.parameters,
+            'reasoning': action.reasoning
         }
         
         self.execution_log.append(log_entry)
