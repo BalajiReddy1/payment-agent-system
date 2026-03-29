@@ -434,6 +434,11 @@ class PaymentDecisionMaker:
         # Apply confidence factor
         total_score *= action.confidence
         
+        # Penalize NO_ACTION when pattern is severe (encourages taking action)
+        if action.action_type == ActionType.NO_ACTION and context.pattern.severity > 0.3:
+            inaction_penalty = context.pattern.severity * 0.5  # Up to 50% penalty
+            total_score *= (1.0 - inaction_penalty)
+        
         explanation = (
             f"Success: {success_score:.2f}, "
             f"Latency: {latency_score:.2f}, "

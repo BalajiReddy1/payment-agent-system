@@ -14,16 +14,16 @@ agent:
 # Pattern Detection Thresholds
 thresholds:
   # Minimum confidence to report a pattern
-  pattern_confidence: 0.7
+  pattern_confidence: 0.4
   
   # Minimum score for an action to be considered
-  action_score_minimum: 0.5
+  action_score_minimum: 0.3
   
   # Minimum failure rate increase to detect issuer degradation
-  issuer_degradation_threshold: 0.15
+  issuer_degradation_threshold: 0.08
   
   # Retry rate above which a retry storm is detected
-  retry_storm_threshold: 0.25
+  retry_storm_threshold: 0.15
 
 # Learning Parameters
 learning:

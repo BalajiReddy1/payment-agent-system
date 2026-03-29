@@ -1,8 +1,3 @@
-"""
-Main Entry Point
-Runs the payment agent system with simulation.
-"""
-
 import argparse
 import random
 import time
@@ -14,22 +9,19 @@ from src.simulation.payment_simulator import PaymentSimulator
 
 
 def run_demo_scenario():
-    """Run a demonstration scenario showing agent capabilities"""
     
     print("=" * 80)
     print("AGENTIC AI PAYMENT OPERATIONS SYSTEM - DEMONSTRATION")
     print("=" * 80)
     print()
     
-    # Initialize agent
     print("Initializing payment agent...")
     agent = PaymentAgent(
-        window_size_minutes=5,  # Shorter window for demo
-        analysis_interval_seconds=15,  # Analyze every 15 seconds
+        window_size_minutes=5, 
+        analysis_interval_seconds=15,  
         auto_approve_low_risk=True
     )
     
-    # Initialize simulator
     print("Initializing payment simulator...")
     simulator = PaymentSimulator(base_success_rate=0.96)
     

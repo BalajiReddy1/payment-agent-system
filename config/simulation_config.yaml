@@ -6,7 +6,7 @@ simulation:
   base_success_rate: 0.95
   
   # Transactions per batch in demo mode
-  transactions_per_batch: 25
+  transactions_per_batch: 100
   
   # Base retry rate (percentage of transactions that are retries)
   base_retry_rate: 0.05
