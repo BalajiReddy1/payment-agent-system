@@ -103,11 +103,21 @@ The system follows a **"Brain + Hands"** architecture:
 | **SEMI-AUTO** | Circuit breaker, Routing | ⚡ Quick approval |
 | **MANUAL** | Method suppression | ✅ Required |
 
+The mapping lives in one place — `ACTION_AUTHORIZATION` in `src/models/state.py` —
+and every path that can create an action reads it: the autonomous loop, the LLM
+tool layer and the MCP server alike. A tool call that proposes a MANUAL action
+is queued for approval and returns `Success: False`, not executed. Alongside the
+tiers, `SafetyGuardrails` enforces rate limits, a maximum blast radius, a
+concurrency cap and a minimum confidence before any intervention runs.
+
 ### 5. 🔄 Automatic Rollback
-If an action causes harm, the system automatically rolls back:
+If an action causes harm, the system automatically reverts it:
 - Success rate drops > 5% → Rollback
 - Latency increases > 50% → Rollback
-- Error rate increases > 10% → Rollback
+
+Interventions that simply reach the end of their planned duration are *retired*,
+not rolled back — they are recorded separately so that normal completions don't
+consume the rollback budget that gates future actions.
 
 ### 6. 📖 Decision Explainability
 Every decision includes:
@@ -121,6 +131,17 @@ Every decision includes:
 - Updates action weights based on outcomes
 - Tracks pattern detection accuracy
 - Refines decision strategies over time
+
+### 7a. 🔁 Closed Control Loop
+The simulated payment world **reads the agent's control plane**. A circuit
+breaker reroutes traffic away from the affected issuer, a suppressed method
+stops being offered, a tightened retry limit reduces retry volume and a lowered
+timeout truncates latency. Because the world responds, the metrics the agent
+observes after acting reflect what it did — which is what makes rollback,
+outcome scoring and learning measure something real rather than noise.
+
+Run `pytest` to see this asserted end to end: an injected issuer outage drops
+the success rate, and the agent's own intervention brings it back up.
 
 ### 8. 🌐 MCP Server (Model Context Protocol)
 - All tools are also available as an MCP-compliant server (`mcp_server.py`)
@@ -207,6 +228,16 @@ python main.py --mode demo
 
 # Run the REST API (separate terminal)
 uvicorn api.main:app --reload
+```
+
+### Running the tests
+
+The agent core (`src/`, `payment_tools.py`) depends only on the standard
+library, so the suite runs without installing the dashboard or LLM stack:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
 ```
 
 ### Option 2: Docker

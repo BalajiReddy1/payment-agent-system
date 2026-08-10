@@ -7,23 +7,47 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
-from src.models.state import Action, ActionType, AgentState, AuthorizationLevel
+from src.models.state import (
+    Action,
+    ActionType,
+    AgentState,
+    AuthorizationLevel,
+    RiskLevel,
+)
 
 
 class PaymentExecutor:
     """
     Executes payment operations actions safely with guardrails.
-    
+
     Responsibilities:
     - Execute approved actions
     - Monitor action outcomes
     - Trigger automatic rollbacks
     - Maintain audit trail
     """
-    
-    def __init__(self):
+
+    # Actions that change system state, and so must be tracked as active
+    # interventions, monitored, and reverted. Everything else (alerts, no-ops)
+    # is fire-and-forget: there is nothing to roll back, and holding them open
+    # would block later actions on the same target forever.
+    STATEFUL_ACTIONS = frozenset({
+        ActionType.CIRCUIT_BREAKER,
+        ActionType.ADJUST_RETRY,
+        ActionType.ROUTE_CHANGE,
+        ActionType.METHOD_SUPPRESS,
+    })
+
+    def __init__(self, guardrails=None):
         self.logger = logging.getLogger(__name__)
-        
+
+        # Operational limits. Injected so tests and deployments can tighten or
+        # loosen them without editing the executor.
+        if guardrails is None:
+            from src.safety.guardrails import SafetyGuardrails
+            guardrails = SafetyGuardrails()
+        self.guardrails = guardrails
+
         # Rollback triggers
         self.rollback_thresholds = {
             'success_rate_drop': 0.05,  # 5% drop triggers rollback
@@ -34,9 +58,13 @@ class PaymentExecutor:
         
         # Action execution log
         self.execution_log: List[Dict] = []
-        
+
         # Active interventions
         self.active_interventions: Dict[str, Action] = {}
+
+        # Interventions retired because their planned duration elapsed. Kept
+        # separate from rollbacks: these are normal completions, not failures.
+        self.expired_actions: List[str] = []
     
     def execute(
         self,
@@ -55,14 +83,18 @@ class PaymentExecutor:
         Returns:
             Tuple of (success, message)
         """
+        stateful = action.action_type in self.STATEFUL_ACTIONS
+        if stateful:
+            state.actions_attempted += 1
+
         # Pre-execution checks
         can_execute, reason = self._pre_execution_checks(action, state)
         if not can_execute:
             self.logger.warning(f"Action {action.action_id} blocked: {reason}")
             return False, reason
-        
+
         # Record baseline metrics before action
-        baseline_metrics = self._capture_baseline_metrics(observer)
+        baseline_metrics = self.capture_metrics(observer)
         
         # Execute based on action type
         success, message = self._execute_by_type(action, state)
@@ -70,15 +102,22 @@ class PaymentExecutor:
         if success:
             action.status = "executed"
             action.executed_at = datetime.now()
-            self.active_interventions[action.action_id] = action
-            
+            if stateful:
+                self.active_interventions[action.action_id] = action
+            else:
+                action.completed_at = action.executed_at
+                action.status = "completed"
+
             # Log execution
             self._log_execution(action, baseline_metrics, success, message)
             
             # Update state
-            state.actions_taken_last_hour += 1
-            state.actions_executed += 1
-            
+            if stateful:
+                state.actions_taken_last_hour += 1
+                state.actions_executed += 1
+            elif action.action_type == ActionType.ALERT_OPS:
+                state.alerts_raised += 1
+
             self.logger.info(
                 f"Action {action.action_id} ({action.action_type.value}) "
                 f"executed successfully: {message}"
@@ -97,28 +136,42 @@ class PaymentExecutor:
         action: Action,
         state: AgentState
     ) -> Tuple[bool, str]:
-        """Perform safety checks before execution"""
-        
+        """
+        Perform safety checks before execution.
+
+        This is the last gate before an action touches the control plane, so it
+        re-checks authorization even though callers are expected to have done
+        so already: an unapproved action must never execute just because some
+        upstream path forgot to ask.
+        """
         # Check authorization
         if action.authorization_level == AuthorizationLevel.MANUAL:
             if not action.approver:
                 return False, "Manual authorization required"
-        
+
         if action.authorization_level == AuthorizationLevel.SEMI_AUTOMATIC:
-            if not action.approver and action.risk_level.value != 'low':
+            if not action.approver and action.risk_level != RiskLevel.LOW:
                 return False, "Semi-automatic action requires approval for non-low risk"
-        
+
         # Check state constraints
         can_take_action, reason = state.can_take_action(action)
         if not can_take_action:
             return False, reason
-        
+
+        # Check operational limits (rate, blast radius, concurrency, confidence)
+        if action.action_type in self.STATEFUL_ACTIONS:
+            allowed, _, reason = self.guardrails.check_action_allowed(
+                action, state, len(self.active_interventions)
+            )
+            if not allowed:
+                return False, reason
+
         # Check if similar action is already active
         for active_action in self.active_interventions.values():
             if (active_action.action_type == action.action_type and
                 active_action.target == action.target):
                 return False, f"Similar action already active: {active_action.action_id}"
-        
+
         return True, "Checks passed"
     
     def _execute_by_type(
@@ -254,8 +307,8 @@ class PaymentExecutor:
         
         return True, "Alert sent to ops team"
     
-    def _capture_baseline_metrics(self, observer) -> Dict:
-        """Capture baseline metrics before action"""
+    def capture_metrics(self, observer) -> Dict:
+        """Snapshot the metrics used as an action baseline and for scoring."""
         return {
             'success_rate': observer.get_success_rate('overall', 'current'),
             'avg_latency': observer.get_latency_stats('overall').get('mean', 0),
@@ -292,50 +345,69 @@ class PaymentExecutor:
         observer
     ) -> List[str]:
         """
-        Monitor active interventions and trigger rollbacks if needed.
-        
+        Monitor active interventions, reverting those that are doing harm and
+        retiring those whose scheduled duration has elapsed.
+
+        Expiry and rollback are deliberately distinct. An intervention that ran
+        its planned course and was withdrawn is a success; counting it as a
+        rollback inflates the safety counters that gate future actions, and
+        would eventually stop the agent from acting at all.
+
         Returns:
-            List of action IDs that were rolled back
+            List of action IDs that were rolled back due to harm.
         """
         rolled_back = []
-        current_metrics = self._capture_baseline_metrics(observer)
-        
+        current_metrics = self.capture_metrics(observer)
+
         for action_id, action in list(self.active_interventions.items()):
-            # Find baseline for this action
-            baseline = self._find_baseline_for_action(action_id)
+            baseline = self.baseline_for_action(action_id)
             if not baseline:
                 continue
-            
-            # Check for rollback conditions
+
+            if self._has_expired(action):
+                if self._revert_action(action, state):
+                    action.status = "completed"
+                    self.expired_actions.append(action_id)
+                    self.logger.info(
+                        f"Action {action_id} ({action.action_type.value}) "
+                        f"retired: planned duration elapsed"
+                    )
+                continue
+
             should_rollback, reason = self._should_rollback(
                 action, baseline, current_metrics
             )
-            
-            if should_rollback:
-                success = self._rollback_action(action, state)
-                if success:
-                    rolled_back.append(action_id)
-                    state.rollbacks_last_hour += 1
-                    self.logger.warning(
-                        f"Action {action_id} rolled back: {reason}"
-                    )
-                    print(f"\n⚠️  ROLLBACK: {action.action_type.value} for {action.target} - {reason}\n")
-        
+
+            if should_rollback and self._revert_action(action, state):
+                action.status = "rolled_back"
+                rolled_back.append(action_id)
+                state.rollbacks_last_hour += 1
+                self.logger.warning(f"Action {action_id} rolled back: {reason}")
+
         return rolled_back
-    
+
+    def _has_expired(self, action: Action) -> bool:
+        """True if the action has outlived its planned duration."""
+        if not action.executed_at:
+            return False
+        max_duration = timedelta(
+            minutes=action.parameters.get('duration_minutes', 30)
+        )
+        return (datetime.now() - action.executed_at) > max_duration
+
     def _should_rollback(
         self,
         action: Action,
         baseline: Dict,
         current: Dict
     ) -> Tuple[bool, str]:
-        """Determine if action should be rolled back"""
-        
+        """Determine whether an action is actively making things worse."""
+
         # Check success rate
         success_drop = baseline['success_rate'] - current['success_rate']
         if success_drop > self.rollback_thresholds['success_rate_drop']:
             return True, f"Success rate dropped {success_drop:.1%}"
-        
+
         # Check latency
         if baseline['avg_latency'] > 0:
             latency_increase = (
@@ -344,21 +416,17 @@ class PaymentExecutor:
             )
             if latency_increase > self.rollback_thresholds['latency_increase']:
                 return True, f"Latency increased {latency_increase:.1%}"
-        
-        # Check if action duration has expired
-        if action.executed_at:
-            duration = datetime.now() - action.executed_at
-            max_duration = timedelta(
-                minutes=action.parameters.get('duration_minutes', 30)
-            )
-            if duration > max_duration:
-                return True, "Action duration expired"
-        
+
         return False, ""
-    
-    def _rollback_action(self, action: Action, state: AgentState) -> bool:
-        """Rollback an executed action"""
-        
+
+    def _revert_action(self, action: Action, state: AgentState) -> bool:
+        """
+        Undo an executed action's effect on the control plane.
+
+        Used for both rollback (the action was harmful) and expiry (the action
+        finished its run); the mechanics are identical, only the bookkeeping
+        differs.
+        """
         try:
             if action.action_type == ActionType.CIRCUIT_BREAKER:
                 issuer = action.parameters.get('issuer')
@@ -381,17 +449,16 @@ class PaymentExecutor:
             # Remove from active interventions
             if action.action_id in self.active_interventions:
                 del self.active_interventions[action.action_id]
-            
-            action.status = "rolled_back"
+
             action.completed_at = datetime.now()
-            
+
             return True
-        
+
         except Exception as e:
-            self.logger.error(f"Rollback failed for {action.action_id}: {e}")
+            self.logger.error(f"Revert failed for {action.action_id}: {e}")
             return False
     
-    def _find_baseline_for_action(self, action_id: str) -> Optional[Dict]:
+    def baseline_for_action(self, action_id: str) -> Optional[Dict]:
         """Find the baseline metrics for an action"""
         for log_entry in reversed(self.execution_log):
             if log_entry['action_id'] == action_id:

@@ -12,16 +12,16 @@ from src.models.state import (
     AgentState,
     AuthorizationLevel,
     DecisionContext,
-    Hypothesis,
     Pattern,
     RiskLevel,
 )
+from src.utils.stats import clamp
 
 
 class PaymentDecisionMaker:
     """
     Makes informed decisions about payment interventions.
-    
+
     Capabilities:
     - Multi-objective optimization (success rate, latency, cost, risk)
     - Trade-off analysis
@@ -29,7 +29,11 @@ class PaymentDecisionMaker:
     - Authorization level determination
     - Explainable decision-making
     """
-    
+
+    # Score assigned to an objective an action leaves unchanged. Every objective
+    # scorer is centred here so "do nothing" lands mid-scale instead of winning.
+    NEUTRAL_SCORE = 0.5
+
     def __init__(self):
         # Objective weights (can be tuned)
         self.weights = {
@@ -103,51 +107,59 @@ class PaymentDecisionMaker:
             }
         }
     
+    def rank_actions(
+        self,
+        context: DecisionContext
+    ) -> List[Tuple[Action, float, str]]:
+        """
+        Score every candidate action for a pattern, best first.
+
+        Callers get the whole ranking rather than just the winner so that a
+        candidate refused downstream (rate limit, duplicate intervention,
+        missing approval) can fall through to the next best option instead of
+        the pattern going unaddressed.
+
+        Returns:
+            List of (action, score, score_breakdown), highest score first.
+        """
+        candidates = self._generate_actions(context.pattern, context)
+
+        evaluated = []
+        for action in candidates:
+            score, explanation = self._evaluate_action(action, context)
+            evaluated.append((action, score, explanation))
+
+        evaluated.sort(key=lambda item: item[1], reverse=True)
+
+        # Attach full reasoning to each candidate so whichever one is ultimately
+        # executed carries its own explanation.
+        for action, _, _ in evaluated:
+            action.reasoning = self._build_reasoning(
+                context.pattern, action, evaluated, context
+            )
+
+        return evaluated
+
     def decide(self, context: DecisionContext) -> Tuple[Optional[Action], str]:
         """
-        Main decision method - choose the best action given the context.
-        
-        Args:
-            context: DecisionContext with pattern, hypotheses, state, etc.
-        
+        Choose the single best action given the context.
+
         Returns:
             Tuple of (selected action, reasoning)
         """
-        pattern = context.pattern
-        state = context.current_state
-        
-        # Generate possible actions
-        possible_actions = self._generate_actions(pattern, context)
-        
-        if not possible_actions:
+        evaluated = self.rank_actions(context)
+
+        if not evaluated:
             return None, "No viable actions available for this pattern"
-        
-        # Evaluate each action
-        evaluated_actions = []
-        for action in possible_actions:
-            score, explanation = self._evaluate_action(action, context)
-            evaluated_actions.append((action, score, explanation))
-        
-        # Sort by score
-        evaluated_actions.sort(key=lambda x: x[1], reverse=True)
-        
-        # Select best action
-        best_action, best_score, best_explanation = evaluated_actions[0]
-        
-        # Check if action is allowed
-        can_execute, reason = state.can_take_action(best_action)
+
+        best_action = evaluated[0][0]
+
+        can_execute, reason = context.current_state.can_take_action(best_action)
         if not can_execute:
             return None, f"Best action blocked: {reason}"
-        
-        # Build comprehensive reasoning
-        reasoning = self._build_reasoning(
-            pattern, best_action, evaluated_actions, context
-        )
-        
-        best_action.reasoning = reasoning
-        
-        return best_action, reasoning
-    
+
+        return best_action, best_action.reasoning
+
     def _generate_actions(self, pattern: Pattern, context: DecisionContext) -> List[Action]:
         """Generate possible actions for a pattern"""
         actions = []
@@ -165,12 +177,13 @@ class PaymentDecisionMaker:
         elif pattern.pattern_type == 'geographic_issue':
             actions.extend(self._generate_geographic_actions(pattern, context))
         
-        # Always add "do nothing" option
+        # Always add "do nothing" as the baseline the alternatives must beat.
         actions.append(self._create_no_action(pattern))
-        
-        # Always add "alert ops" option
-        actions.append(self._create_alert_action(pattern))
-        
+
+        # Note: alerting ops is deliberately NOT a candidate here. It changes
+        # nothing about the payment flow, so as a competitor it would always
+        # look cheaper and safer than actually mitigating. Alerts are emitted
+        # alongside the chosen action instead - see PaymentAgent._alert_phase.
         return actions
     
     def _generate_issuer_actions(self, pattern: Pattern, context: DecisionContext) -> List[Action]:
@@ -369,12 +382,17 @@ class PaymentDecisionMaker:
             created_at=datetime.now()
         )
     
-    def _create_alert_action(self, pattern: Pattern) -> Action:
-        """Create an 'alert ops team' action"""
+    def create_alert_action(self, pattern: Pattern) -> Action:
+        """
+        Create an 'alert ops team' notification for a pattern.
+
+        The target is pattern-specific so that alerting about one issuer never
+        suppresses an alert about a different one.
+        """
         return Action(
             action_id='',
             action_type=ActionType.ALERT_OPS,
-            target='ops_team',
+            target=f'ops_team:{pattern.pattern_type}:{pattern.affected_value}',
             parameters={
                 'pattern_type': pattern.pattern_type,
                 'severity': pattern.severity,
@@ -433,12 +451,14 @@ class PaymentDecisionMaker:
         
         # Apply confidence factor
         total_score *= action.confidence
-        
-        # Penalize NO_ACTION when pattern is severe (encourages taking action)
-        if action.action_type == ActionType.NO_ACTION and context.pattern.severity > 0.3:
+
+        # Penalise standing still when the pattern is severe. This has to key off
+        # measured impact rather than ActionType: any candidate that changes
+        # nothing is inaction, whatever it is labelled.
+        if self._is_zero_impact(action) and context.pattern.severity > 0.3:
             inaction_penalty = context.pattern.severity * 0.5  # Up to 50% penalty
             total_score *= (1.0 - inaction_penalty)
-        
+
         explanation = (
             f"Success: {success_score:.2f}, "
             f"Latency: {latency_score:.2f}, "
@@ -450,40 +470,48 @@ class PaymentDecisionMaker:
         return total_score, explanation
     
     def _score_success_impact(self, delta: float, pattern_severity: float) -> float:
-        """Score the success rate impact (higher delta = better)"""
-        # Positive delta is good, scale by pattern severity
+        """
+        Score the success rate impact (higher delta = better).
+
+        Zero impact scores NEUTRAL, not 1.0. Scoring "changes nothing" as a
+        perfect outcome makes every do-nothing candidate unbeatable, because it
+        also scores perfectly on latency, cost and risk.
+        """
         if delta > 0:
-            return min(delta / 0.20 * pattern_severity, 1.0)
-        else:
-            # Negative delta is bad
-            return max(0.0, 1.0 + delta / 0.10)
-    
+            # Benefit is discounted by how severe the problem actually is, so
+            # the agent does not over-react to weak signals.
+            return self.NEUTRAL_SCORE * (1.0 + clamp(delta / 0.20 * pattern_severity))
+        if delta < 0:
+            return self.NEUTRAL_SCORE * clamp(1.0 + delta / 0.10)
+        return self.NEUTRAL_SCORE
+
     def _score_latency_impact(self, delta_ms: float, current_latency: float) -> float:
         """Score latency impact (negative delta = better, means reduction)"""
-        # Negative delta (reduction) is good
+        baseline = max(current_latency, 100.0)
         if delta_ms < 0:
-            reduction_pct = abs(delta_ms) / max(current_latency, 100)
-            return min(reduction_pct * 2, 1.0)
-        else:
-            # Positive delta (increase) is bad
-            increase_pct = delta_ms / max(current_latency, 100)
-            return max(0.0, 1.0 - increase_pct)
-    
+            return self.NEUTRAL_SCORE * (1.0 + clamp(abs(delta_ms) / baseline * 2))
+        if delta_ms > 0:
+            return self.NEUTRAL_SCORE * clamp(1.0 - delta_ms / baseline)
+        return self.NEUTRAL_SCORE
+
     def _score_cost_impact(self, delta_per_txn: float) -> float:
         """Score cost impact (lower delta = better)"""
-        # No cost increase is perfect
-        if delta_per_txn == 0:
-            return 1.0
-        # Small increases are acceptable
-        elif delta_per_txn <= 0.02:
-            return 0.8
-        # Medium increases are okay
-        elif delta_per_txn <= 0.05:
-            return 0.5
-        # Large increases are bad
-        else:
-            return 0.2
-    
+        if delta_per_txn < 0:
+            # Saving money should score above neutral, not below it.
+            return self.NEUTRAL_SCORE * (1.0 + clamp(abs(delta_per_txn) / 0.02))
+        if delta_per_txn > 0:
+            return self.NEUTRAL_SCORE * clamp(1.0 - delta_per_txn / 0.10)
+        return self.NEUTRAL_SCORE
+
+    @staticmethod
+    def _is_zero_impact(action: Action) -> bool:
+        """True if the action does not change the system in any measurable way."""
+        impact = action.estimated_impact
+        return all(
+            abs(impact.get(key, 0.0)) < 1e-9
+            for key in ('success_rate_delta', 'latency_delta_ms', 'cost_delta_per_txn')
+        )
+
     def _score_risk(self, risk_level: RiskLevel, affected_pct: float, state: AgentState) -> float:
         """Score the risk of an action (lower risk = better)"""
         # Base risk score

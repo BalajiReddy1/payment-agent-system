@@ -4,12 +4,11 @@ Learns from action outcomes to improve future decisions.
 """
 
 from collections import defaultdict
-from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
-
-import numpy as np
+from datetime import datetime
+from typing import Dict, List
 
 from src.models.state import Action, Pattern
+from src.utils.stats import mean
 
 
 class PaymentLearner:
@@ -107,7 +106,7 @@ class PaymentLearner:
                 error = abs((est_val - act_val) / est_val)
                 errors.append(error)
         
-        return np.mean(errors) if errors else 0.0
+        return mean(errors) if errors else 0.0
     
     def evaluate_pattern_detection(
         self,
@@ -181,9 +180,9 @@ class PaymentLearner:
         
         return {
             'sample_size': len(outcomes),
-            'avg_success_improvement': float(np.mean(success_improvements)),
-            'avg_latency_improvement': float(np.mean(latency_improvements)),
-            'prediction_accuracy': 1.0 - float(np.mean(prediction_errors)),
+            'avg_success_improvement': mean(success_improvements),
+            'avg_latency_improvement': mean(latency_improvements),
+            'prediction_accuracy': 1.0 - mean(prediction_errors),
             'success_rate': successes / len(outcomes)
         }
     
@@ -327,7 +326,7 @@ class PaymentLearner:
         # Update weights based on which objectives correlate with success
         for objective, scores in objective_scores.items():
             if scores:
-                avg_score = np.mean(scores)
+                avg_score = mean(scores)
                 current_weight = decision_maker.weights.get(objective, 0.25)
                 
                 # Adjust weight toward objectives that lead to success

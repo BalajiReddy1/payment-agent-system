@@ -8,7 +8,15 @@ import time
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from src.models.state import AgentMemory, AgentState, DecisionContext, PaymentTransaction
+from src.models.state import (
+    ActionType,
+    AgentMemory,
+    AgentState,
+    AuthorizationLevel,
+    DecisionContext,
+    PaymentTransaction,
+    RiskLevel,
+)
 from src.agent.decision_maker import PaymentDecisionMaker
 from src.agent.executor import PaymentExecutor
 from src.agent.learner import PaymentLearner
@@ -28,15 +36,21 @@ class PaymentAgent:
         self,
         window_size_minutes: int = 10,
         analysis_interval_seconds: int = 30,
-        auto_approve_low_risk: bool = True
+        auto_approve_low_risk: bool = True,
+        min_severity_to_act: float = 0.3,
+        outcome_evaluation_seconds: int = 300
     ):
         """
         Initialize the payment agent.
-        
+
         Args:
             window_size_minutes: Sliding window size for observations
             analysis_interval_seconds: How often to run analysis
             auto_approve_low_risk: Whether to auto-approve low-risk actions
+            min_severity_to_act: Pattern severity below which the agent stays put
+            outcome_evaluation_seconds: How long an intervention must run before
+                its outcome is scored. Shorten it for demos; in production this
+                wants to be long enough for the effect to actually show up.
         """
         # Core components
         self.observer = PaymentObserver(window_size_minutes=window_size_minutes)
@@ -52,6 +66,10 @@ class PaymentAgent:
         # Configuration
         self.analysis_interval = analysis_interval_seconds
         self.auto_approve_low_risk = auto_approve_low_risk
+        self.min_severity_to_act = min_severity_to_act
+
+        # How long an intervention must run before its outcome is scored
+        self.outcome_evaluation_seconds = outcome_evaluation_seconds
         
         # Logging
         self.logger = logging.getLogger(__name__)
@@ -93,7 +111,9 @@ class PaymentAgent:
             'timestamp': datetime.now().isoformat(),
             'patterns_detected': [],
             'actions_taken': [],
+            'alerts_raised': [],
             'rollbacks_executed': [],
+            'expired_interventions': [],
             'learning_updates': {}
         }
         
@@ -151,11 +171,12 @@ class PaymentAgent:
         """Reasoning phase - detect patterns and generate hypotheses"""
         # Detect patterns
         patterns = self.reasoner.analyze(self.observer)
-        
-        # Store in memory
+
+        # Store in memory and account for them
         for pattern in patterns:
             self.memory.add_pattern(pattern)
-        
+        self.state.patterns_detected += len(patterns)
+
         # Generate hypotheses for each pattern
         for pattern in patterns:
             hypotheses = self.reasoner.generate_hypotheses(pattern)
@@ -184,13 +205,15 @@ class PaymentAgent:
         """Decision and action phase"""
         for pattern in patterns:
             # Skip if severity is too low
-            if pattern.severity < 0.3:
+            if pattern.severity < self.min_severity_to_act:
                 continue
-            
-            # Generate hypotheses
+
+            # Notify ops about every actionable pattern, independent of whether
+            # a mitigation is chosen. Alerting is not an alternative to fixing.
+            self._emit_alert(pattern, results)
+
             hypotheses = self.reasoner.generate_hypotheses(pattern)
-            
-            # Create decision context
+
             context = DecisionContext(
                 pattern=pattern,
                 hypotheses=hypotheses,
@@ -199,75 +222,137 @@ class PaymentAgent:
                 historical_outcomes=self.learner.action_outcomes,
                 constraints={}
             )
-            
-            # Make decision
-            action, reasoning = self.decision_maker.decide(context)
-            
-            if action is None:
-                self.logger.info(f"No action selected for pattern {pattern.pattern_id}")
+
+            ranked = self.decision_maker.rank_actions(context)
+            if not ranked:
+                self.logger.info(f"No candidate actions for pattern {pattern.pattern_id}")
                 continue
-            
-            # Check if action needs approval
-            needs_approval = not (
-                self.auto_approve_low_risk and
-                action.risk_level.value == 'low'
-            )
-            
-            if needs_approval and action.authorization_level.value != 'automatic':
+
+            self._execute_best_available(ranked, pattern, results)
+
+    def _execute_best_available(self, ranked: List, pattern, results: Dict):
+        """
+        Try candidates in score order until one is actually executed.
+
+        A single refusal (rate limit, duplicate intervention, missing approval)
+        must not leave the pattern unaddressed when a viable second choice
+        exists.
+        """
+        rejections = []
+
+        for action, score, _ in ranked:
+            if action.action_type == ActionType.NO_ACTION:
+                # The baseline out-scored every intervention: standing pat is
+                # the decision. Stop here rather than reaching past it.
                 self.logger.info(
-                    f"Action {action.action_id} requires approval "
-                    f"(risk: {action.risk_level.value})"
+                    f"Holding for pattern {pattern.pattern_id}: "
+                    f"no intervention beat no-action (score {score:.2f})"
                 )
-                # In a real system, would request approval here
-                # For demo, we'll auto-approve medium risk
-                if action.risk_level.value == 'medium':
-                    action.approver = 'auto_approved_for_demo'
-                else:
-                    continue
-            
-            # Execute action
+                return
+
+            allowed, reason = self._check_approval(action)
+            if not allowed:
+                rejections.append(f"{action.action_type.value}: {reason}")
+                continue
+
             success, message = self.executor.execute(
                 action, self.state, self.observer
             )
-            
-            if success:
-                self.memory.add_action(action)
-                self.state.actions_successful += 1
-                
-                results['actions_taken'].append({
-                    'action_id': action.action_id,
-                    'type': action.action_type.value,
-                    'target': action.target,
-                    'risk_level': action.risk_level.value,
-                    'estimated_impact': action.estimated_impact,
-                    'reasoning_summary': reasoning[:200] + '...' if len(reasoning) > 200 else reasoning
-                })
-    
+
+            if not success:
+                rejections.append(f"{action.action_type.value}: {message}")
+                continue
+
+            self.memory.add_action(action)
+
+            results['actions_taken'].append({
+                'action_id': action.action_id,
+                'type': action.action_type.value,
+                'target': action.target,
+                'risk_level': action.risk_level.value,
+                'score': round(score, 3),
+                'estimated_impact': action.estimated_impact,
+                'reasoning': action.reasoning,
+                'rejected_alternatives': rejections,
+            })
+            return
+
+        if rejections:
+            self.logger.info(
+                f"No action executed for pattern {pattern.pattern_id}; "
+                f"all candidates refused: {'; '.join(rejections)}"
+            )
+
+    def _check_approval(self, action) -> tuple:
+        """
+        Decide whether the agent may execute this action unattended.
+
+        Returns:
+            Tuple of (allowed, reason)
+        """
+        if action.authorization_level == AuthorizationLevel.AUTOMATIC:
+            return True, "automatic"
+
+        if action.authorization_level == AuthorizationLevel.SEMI_AUTOMATIC:
+            if self.auto_approve_low_risk and action.risk_level == RiskLevel.LOW:
+                action.approver = 'agent:auto_low_risk'
+                return True, "auto-approved (low risk)"
+            return False, "awaiting operator approval (semi-automatic)"
+
+        return False, "requires explicit human approval (manual)"
+
+    def _emit_alert(self, pattern, results: Dict):
+        """Send an ops notification for a pattern, alongside any mitigation."""
+        alert = self.decision_maker.create_alert_action(pattern)
+        success, _ = self.executor.execute(alert, self.state, self.observer)
+        if success:
+            results['alerts_raised'].append({
+                'pattern_id': pattern.pattern_id,
+                'pattern_type': pattern.pattern_type,
+                'severity': pattern.severity,
+                'target': alert.target,
+            })
+
     def _monitor_phase(self, results: Dict):
-        """Monitoring phase - check for rollbacks"""
+        """Monitoring phase - revert harmful actions, retire finished ones"""
+        expired_before = len(self.executor.expired_actions)
+
         rolled_back = self.executor.monitor_and_rollback(
             self.state, self.observer
         )
-        
+
         results['rollbacks_executed'] = rolled_back
-        
+        results['expired_interventions'] = self.executor.expired_actions[expired_before:]
+
         if rolled_back:
             self.logger.warning(f"Rolled back {len(rolled_back)} actions")
     
     def _learn_phase(self, results: Dict):
         """Learning phase - update from outcomes"""
-        # Record outcomes for recently completed actions
-        for action in self.executor.get_active_interventions():
-            if action.executed_at:
-                duration = datetime.now() - action.executed_at
-                
-                # After 5 minutes, evaluate the action
-                if duration.seconds >= 300 and not action.actual_impact:
-                    baseline = self.executor._find_baseline_for_action(action.action_id)
-                    if baseline:
-                        current_metrics = self.executor._capture_baseline_metrics(self.observer)
-                        self.learner.record_outcome(action, baseline, current_metrics)
-        
+        current_metrics = self.executor.capture_metrics(self.observer)
+
+        # Evaluate interventions that have been running long enough to have had
+        # an effect, plus any that finished (expired or rolled back) since the
+        # last cycle - those would otherwise never be scored at all.
+        candidates = list(self.executor.get_active_interventions())
+        candidates += [
+            action for action in self.memory.action_history
+            if action.completed_at and not action.actual_impact
+        ]
+
+        for action in candidates:
+            if not action.executed_at or action.actual_impact:
+                continue
+
+            settled = action.completed_at is not None
+            elapsed = (datetime.now() - action.executed_at).total_seconds()
+            if not settled and elapsed < self.outcome_evaluation_seconds:
+                continue
+
+            baseline = self.executor.baseline_for_action(action.action_id)
+            if baseline:
+                self.learner.record_outcome(action, baseline, current_metrics)
+
         # Get learning summary
         learning_summary = self.learner.get_learning_summary()
         results['learning_updates'] = {
@@ -299,8 +384,9 @@ class PaymentAgent:
                 'patterns_detected': self.state.patterns_detected,
                 'true_positives': self.state.true_positives,
                 'false_positives': self.state.false_positives,
+                'actions_attempted': self.state.actions_attempted,
                 'actions_executed': self.state.actions_executed,
-                'actions_successful': self.state.actions_successful
+                'alerts_raised': self.state.alerts_raised
             },
             'observation_summary': self.observer.get_summary(),
             'active_interventions': [

@@ -47,7 +47,12 @@ def get_simulator() -> PaymentSimulator:
     """Get or create simulator instance."""
     global simulator
     if simulator is None:
-        simulator = PaymentSimulator(base_success_rate=0.95)
+        # Bound to the agent's state so the simulated world responds to
+        # whatever the agent does to the control plane.
+        simulator = PaymentSimulator(
+            base_success_rate=0.95,
+            control_plane=get_agent().state
+        )
     return simulator
 
 
@@ -111,7 +116,7 @@ async def get_status():
     status = agent.get_status()
     
     return StatusResponse(
-        is_active=status['state']['is_active'],
+        is_active=status['is_active'],
         cycle_count=status['cycle_count'],
         success_rate=status['state']['success_rate'],
         avg_latency_ms=status['state']['avg_latency_ms'],

@@ -9,7 +9,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -20,7 +19,6 @@ sys.path.insert(0, str(project_root))
 from adk_agent import analyze_and_act
 from payment_tools import executor as shared_executor, agent_state as shared_state
 from dashboard.components import (
-    render_decision_log_entry,
     render_empty_state,
     render_header,
     render_intervention_pill,
@@ -28,9 +26,11 @@ from dashboard.components import (
 )
 from dashboard.styles import DARK_THEME
 from src.agent.core import PaymentAgent
-from src.models.state import PaymentMethod
-from src.safety.guardrails import SafetyGuardrails, SafetyLimits, AuthorizationLevel
+from src.safety.guardrails import SafetyGuardrails, SafetyLimits
 from src.simulation.payment_simulator import PaymentSimulator
+
+REFRESH_SECONDS = 2.0
+CYCLE_INTERVAL_SECONDS = 5.0
 
 # Page configuration
 st.set_page_config(
@@ -58,7 +58,10 @@ def init_session_state():
         st.session_state.agent.state = shared_state
     
     if 'simulator' not in st.session_state:
-        st.session_state.simulator = PaymentSimulator(base_success_rate=0.95)
+        st.session_state.simulator = PaymentSimulator(
+            base_success_rate=0.95,
+            control_plane=st.session_state.agent.state
+        )
     
     if 'cycle_history' not in st.session_state:
         st.session_state.cycle_history = []
@@ -341,7 +344,7 @@ def render_explainability(results: dict):
                 </div>
                 <div style='color: #8888aa; font-size: 0.9rem;'>
                     <b>Target:</b> {action.get('target', 'System')}<br>
-                    <b>Reasoning:</b> {action.get('reasoning', 'Optimize system performance')[:100]}<br>
+                    <b>Reasoning:</b> {(action.get('reasoning') or 'No reasoning recorded').splitlines()[0][:120]}<br>
                     <b>Expected Impact:</b> +{action.get('estimated_impact', {}).get('success_rate_delta', 0):.1%} success rate
                 </div>
             </div>
@@ -514,23 +517,36 @@ def render_safety_guardrails():
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.markdown("""
-        <div style='background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); 
+        # Rendered from the live authorization map rather than a hardcoded
+        # list, so the panel cannot claim a safety model the code does not
+        # actually enforce.
+        tiers = safety.authorization_tiers()
+        tier_colors = {
+            'automatic': '#00d26a',
+            'semi_automatic': '#ffc107',
+            'manual': '#ff5252',
+        }
+        tier_rows = "<br>".join(
+            f"• <span style='color: {tier_colors.get(tier, '#8888aa')};'>"
+            f"{tier.replace('_', '-').upper()}</span>: "
+            f"{', '.join(a.replace('_', ' ').title() for a in actions) or '—'}"
+            for tier, actions in tiers.items()
+        )
+        st.markdown(f"""
+        <div style='background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                     border-radius: 10px; padding: 15px; border: 1px solid #2a2a5a;'>
             <div style='color: #00d26a; font-size: 0.9rem; margin-bottom: 5px;'>
                 🔐 Authorization Levels
             </div>
             <div style='color: #8888aa; font-size: 0.8rem;'>
-                • <span style='color: #00d26a;'>AUTOMATIC</span>: Retry, Alerts<br>
-                • <span style='color: #ffc107;'>SEMI-AUTO</span>: Circuit Breaker, Routing<br>
-                • <span style='color: #ff5252;'>MANUAL</span>: Method Suppress
+                {tier_rows}
             </div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col2:
-        actions_used = agent.state.actions_executed
-        max_actions = limits.max_actions_per_hour * 24
+        actions_used = agent.state.actions_taken_last_hour
+        max_actions = limits.max_actions_per_hour
         st.markdown(f"""
         <div style='background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); 
                     border-radius: 10px; padding: 15px; border: 1px solid #2a2a5a;'>
@@ -539,7 +555,7 @@ def render_safety_guardrails():
             </div>
             <div style='color: #8888aa; font-size: 0.8rem;'>
                 • Max Traffic Impact: <b>{limits.max_traffic_impact_percent}%</b><br>
-                • Actions Used: <b>{actions_used}/{max_actions}</b><br>
+                • Actions This Hour: <b>{actions_used}/{max_actions}</b><br>
                 • Max Rollbacks/hr: <b>{limits.max_rollbacks_per_hour}</b>
             </div>
         </div>
@@ -641,7 +657,7 @@ def main():
     
     # Run cycle if enough time has passed
     current_time = time.time()
-    if current_time - st.session_state.last_cycle_time >= 5:
+    if current_time - st.session_state.last_cycle_time >= CYCLE_INTERVAL_SECONDS:
         results = run_agent_cycle()
         st.session_state.last_cycle_time = current_time
     else:
@@ -685,8 +701,10 @@ def main():
     # Decision Log
     render_decision_log(results)
     
-    # Auto-refresh
-    time.sleep(0.1)
+    # Auto-refresh. Streamlit reruns the whole script on every pass, so this
+    # loop is the app's clock; keep it slower than the cycle interval rather
+    # than spinning as fast as the CPU allows.
+    time.sleep(REFRESH_SECONDS)
     st.rerun()
 
 

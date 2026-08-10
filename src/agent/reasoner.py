@@ -6,12 +6,9 @@ Detects patterns, forms hypotheses, and analyzes payment behavior.
 import math
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 
-import numpy as np
-from scipy import stats
-
-from src.models.state import Hypothesis, Pattern, PaymentTransaction
+from src.models.state import Hypothesis, Pattern
 
 
 class PaymentReasoner:

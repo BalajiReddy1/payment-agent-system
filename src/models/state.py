@@ -6,7 +6,7 @@ Defines the core data structures for the payment agent system.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
 
 
@@ -50,6 +50,39 @@ class AuthorizationLevel(Enum):
     AUTOMATIC = "automatic"
     SEMI_AUTOMATIC = "semi_automatic"
     MANUAL = "manual"
+
+
+def _build_action_authorization():
+    """Populate the action -> authorization tier map (see below)."""
+    return {
+        # Reversible, bounded blast radius: the agent owns these outright.
+        ActionType.ADJUST_RETRY: AuthorizationLevel.AUTOMATIC,
+        ActionType.ALERT_OPS: AuthorizationLevel.AUTOMATIC,
+        ActionType.NO_ACTION: AuthorizationLevel.AUTOMATIC,
+        # Materially reshapes traffic; reversible, but an operator should know.
+        ActionType.CIRCUIT_BREAKER: AuthorizationLevel.SEMI_AUTOMATIC,
+        ActionType.ROUTE_CHANGE: AuthorizationLevel.SEMI_AUTOMATIC,
+        # Removes a payment option from real customers. Never unattended.
+        ActionType.METHOD_SUPPRESS: AuthorizationLevel.MANUAL,
+    }
+
+
+# The authorization tier each action type requires. This is the single source
+# of truth for "what may the agent change on its own" - the documented safety
+# model. Every path that constructs an Action must go through
+# required_authorization() rather than choosing a level itself, or the tier
+# becomes advisory and the guardrail silently disappears.
+ACTION_AUTHORIZATION: Dict[ActionType, AuthorizationLevel] = _build_action_authorization()
+
+
+def required_authorization(action_type: 'ActionType') -> 'AuthorizationLevel':
+    """
+    The authorization level an action type requires.
+
+    Unknown action types default to MANUAL: a new capability is not
+    autonomously executable until someone has deliberately classified it.
+    """
+    return ACTION_AUTHORIZATION.get(action_type, AuthorizationLevel.MANUAL)
 
 
 @dataclass
@@ -135,7 +168,7 @@ class Action:
     action_id: str
     action_type: ActionType
     target: str  # What the action affects (issuer_id, method, etc.)
-    parameters: Dict[str, any]
+    parameters: Dict[str, Any]
     risk_level: RiskLevel
     authorization_level: AuthorizationLevel
     estimated_impact: Dict[str, float]
@@ -222,7 +255,7 @@ class AgentState:
     active_circuit_breakers: Set[str] = field(default_factory=set)
     suppressed_methods: Set[str] = field(default_factory=set)
     retry_strategies: Dict[str, Dict] = field(default_factory=dict)
-    routing_overrides: Dict[str, str] = field(default_factory=dict)
+    routing_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     
     # Safety metrics
     actions_taken_last_hour: int = 0
@@ -233,8 +266,11 @@ class AgentState:
     patterns_detected: int = 0
     false_positives: int = 0
     true_positives: int = 0
+    # Interventions only - alerts are counted separately so that "actions
+    # taken" never gets inflated by notifications the agent sends itself.
+    actions_attempted: int = 0
     actions_executed: int = 0
-    actions_successful: int = 0
+    alerts_raised: int = 0
     
     def update_metrics(self, transactions: List[PaymentTransaction]):
         """Update state metrics from transactions"""
@@ -281,7 +317,7 @@ class DecisionContext:
     available_actions: List[Action]
     current_state: AgentState
     historical_outcomes: Dict[str, Dict[str, float]]
-    constraints: Dict[str, any]
+    constraints: Dict[str, Any]
     
     def __post_init__(self):
         if self.constraints is None:

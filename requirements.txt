@@ -1,5 +1,7 @@
-numpy>=1.24.0
-scipy>=1.10.0
+# The agent core (src/, payment_tools.py) depends only on the standard library,
+# so it can be imported, tested and replayed without installing anything.
+# Everything below is for the dashboard, API and LLM surfaces.
+
 streamlit>=1.28.0
 plotly>=5.18.0
 pandas>=2.0.0

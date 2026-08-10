@@ -3,19 +3,16 @@ Observer Component
 Ingests and preprocesses payment transaction data in real-time.
 """
 
-import json
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
-
-import numpy as np
+from typing import Dict, List
 
 from src.models.state import (
     AgentMemory,
-    PaymentMethod,
     PaymentStatus,
     PaymentTransaction,
 )
+from src.utils.stats import mean, percentile
 
 
 class PaymentObserver:
@@ -45,123 +42,142 @@ class PaymentObserver:
             'by_merchant': defaultdict(lambda: {'success': 0, 'failed': 0, 'total': 0}),
         }
         
-        # Latency tracking
-        self.latencies = {
-            'overall': deque(maxlen=1000),
-            'by_issuer': defaultdict(lambda: deque(maxlen=100)),
-            'by_method': defaultdict(lambda: deque(maxlen=100)),
-        }
-        
-        # Error tracking
+        # Error tracking (windowed - see _add_to_stats/_remove_from_stats)
         self.error_codes = defaultdict(int)
         self.error_messages = defaultdict(int)
-        
-        # Retry tracking
+
+        # Retry tracking (windowed)
         self.retry_stats = defaultdict(lambda: {'attempted': 0, 'succeeded': 0})
-        
+
+        # Latency is derived from the window on demand and memoised until the
+        # window changes, so it can never drift out of sync with the counters.
+        self._latency_cache: Dict[str, Dict[str, List[float]]] = {}
+        self._latency_dirty = True
+
     def ingest_transaction(self, transaction: PaymentTransaction):
         """
         Ingest a single payment transaction.
-        
+
         Args:
             transaction: PaymentTransaction object
         """
         # Add to memory
         self.memory.add_transaction(transaction)
-        
-        # Add to sliding window
+
+        # Add to sliding window, then account for it
         self.transactions_window.append(transaction)
+        self._add_to_stats(transaction)
+
+        # Evict anything that has now aged out
         self._cleanup_old_transactions()
-        
-        # Update statistics
-        self._update_stats(transaction)
-        
-        # Track latency
-        self._track_latency(transaction)
-        
-        # Track errors
-        if transaction.status == PaymentStatus.FAILED:
-            if transaction.error_code:
-                self.error_codes[transaction.error_code] += 1
-            if transaction.error_message:
-                self.error_messages[transaction.error_message] += 1
-        
-        # Track retries
-        if transaction.is_retry:
-            original_id = transaction.original_transaction_id or transaction.transaction_id
-            self.retry_stats[original_id]['attempted'] += 1
-            if transaction.status == PaymentStatus.SUCCESS:
-                self.retry_stats[original_id]['succeeded'] += 1
-    
+
+        self._latency_dirty = True
+
     def ingest_batch(self, transactions: List[PaymentTransaction]):
         """Ingest multiple transactions"""
         for transaction in transactions:
             self.ingest_transaction(transaction)
-    
+
     def _cleanup_old_transactions(self):
         """Remove transactions outside the sliding window"""
         cutoff_time = datetime.now() - self.window_size
         while self.transactions_window and self.transactions_window[0].timestamp < cutoff_time:
             old_txn = self.transactions_window.popleft()
             self._remove_from_stats(old_txn)
-    
-    def _update_stats(self, transaction: PaymentTransaction):
-        """Update real-time statistics"""
+            self._latency_dirty = True
+
+    def _stat_buckets(self, transaction: PaymentTransaction) -> List[Dict[str, int]]:
+        """The five counter buckets a transaction contributes to."""
+        return [
+            self.stats['overall']['current'],
+            self.stats['by_issuer'][transaction.issuer],
+            self.stats['by_method'][transaction.payment_method.value],
+            self.stats['by_region'][transaction.region],
+            self.stats['by_merchant'][transaction.merchant_id],
+        ]
+
+    def _add_to_stats(self, transaction: PaymentTransaction):
+        """Account for a transaction entering the window."""
         status_key = 'success' if transaction.status == PaymentStatus.SUCCESS else 'failed'
-        
-        # Overall stats
-        self.stats['overall']['current'][status_key] += 1
-        self.stats['overall']['current']['total'] += 1
-        
-        # By issuer
-        self.stats['by_issuer'][transaction.issuer][status_key] += 1
-        self.stats['by_issuer'][transaction.issuer]['total'] += 1
-        
-        # By payment method
-        method = transaction.payment_method.value
-        self.stats['by_method'][method][status_key] += 1
-        self.stats['by_method'][method]['total'] += 1
-        
-        # By region
-        self.stats['by_region'][transaction.region][status_key] += 1
-        self.stats['by_region'][transaction.region]['total'] += 1
-        
-        # By merchant
-        self.stats['by_merchant'][transaction.merchant_id][status_key] += 1
-        self.stats['by_merchant'][transaction.merchant_id]['total'] += 1
-    
+
+        for bucket in self._stat_buckets(transaction):
+            bucket[status_key] += 1
+            bucket['total'] += 1
+
+        if transaction.status == PaymentStatus.FAILED:
+            if transaction.error_code:
+                self.error_codes[transaction.error_code] += 1
+            if transaction.error_message:
+                self.error_messages[transaction.error_message] += 1
+
+        if transaction.is_retry:
+            key = transaction.original_transaction_id or transaction.transaction_id
+            self.retry_stats[key]['attempted'] += 1
+            if transaction.status == PaymentStatus.SUCCESS:
+                self.retry_stats[key]['succeeded'] += 1
+
     def _remove_from_stats(self, transaction: PaymentTransaction):
-        """Remove transaction from statistics when it leaves the window"""
+        """
+        Account for a transaction leaving the window.
+
+        This is the exact inverse of _add_to_stats. Every counter the observer
+        exposes must be windowed: an error counter that only ever increments
+        turns into a permanent false positive once the window moves on.
+        """
         status_key = 'success' if transaction.status == PaymentStatus.SUCCESS else 'failed'
-        
-        # Overall stats
-        self.stats['overall']['current'][status_key] -= 1
-        self.stats['overall']['current']['total'] -= 1
-        
-        # By issuer
-        self.stats['by_issuer'][transaction.issuer][status_key] -= 1
-        self.stats['by_issuer'][transaction.issuer]['total'] -= 1
-        
-        # By payment method
-        method = transaction.payment_method.value
-        self.stats['by_method'][method][status_key] -= 1
-        self.stats['by_method'][method]['total'] -= 1
-        
-        # By region
-        self.stats['by_region'][transaction.region][status_key] -= 1
-        self.stats['by_region'][transaction.region]['total'] -= 1
-        
-        # By merchant
-        self.stats['by_merchant'][transaction.merchant_id][status_key] -= 1
-        self.stats['by_merchant'][transaction.merchant_id]['total'] -= 1
-    
-    def _track_latency(self, transaction: PaymentTransaction):
-        """Track latency metrics"""
-        if transaction.latency_ms > 0:
-            self.latencies['overall'].append(transaction.latency_ms)
-            self.latencies['by_issuer'][transaction.issuer].append(transaction.latency_ms)
-            self.latencies['by_method'][transaction.payment_method.value].append(transaction.latency_ms)
-    
+
+        for bucket in self._stat_buckets(transaction):
+            bucket[status_key] -= 1
+            bucket['total'] -= 1
+
+        if transaction.status == PaymentStatus.FAILED:
+            if transaction.error_code:
+                self._decrement(self.error_codes, transaction.error_code)
+            if transaction.error_message:
+                self._decrement(self.error_messages, transaction.error_message)
+
+        if transaction.is_retry:
+            key = transaction.original_transaction_id or transaction.transaction_id
+            entry = self.retry_stats.get(key)
+            if entry:
+                entry['attempted'] -= 1
+                if transaction.status == PaymentStatus.SUCCESS:
+                    entry['succeeded'] -= 1
+                if entry['attempted'] <= 0:
+                    del self.retry_stats[key]
+
+    @staticmethod
+    def _decrement(counter: Dict[str, int], key: str):
+        """Decrement a counter, dropping the key when it reaches zero."""
+        counter[key] -= 1
+        if counter[key] <= 0:
+            del counter[key]
+
+    def _latency_buckets(self) -> Dict[str, Dict[str, List[float]]]:
+        """
+        Latency samples grouped by dimension, recomputed only when the window
+        has changed since the last call.
+        """
+        if not self._latency_dirty:
+            return self._latency_cache
+
+        buckets: Dict[str, Dict[str, List[float]]] = {
+            'overall': defaultdict(list),
+            'by_issuer': defaultdict(list),
+            'by_method': defaultdict(list),
+        }
+
+        for txn in self.transactions_window:
+            if txn.latency_ms <= 0:
+                continue
+            buckets['overall']['current'].append(txn.latency_ms)
+            buckets['by_issuer'][txn.issuer].append(txn.latency_ms)
+            buckets['by_method'][txn.payment_method.value].append(txn.latency_ms)
+
+        self._latency_cache = buckets
+        self._latency_dirty = False
+        return buckets
+
     def get_success_rate(self, dimension: str = 'overall', key: str = 'current') -> float:
         """
         Calculate success rate for a dimension.
@@ -185,26 +201,26 @@ class PaymentObserver:
     
     def get_latency_stats(self, dimension: str = 'overall', key: str = None) -> Dict[str, float]:
         """
-        Get latency statistics.
-        
+        Get latency statistics over the current window.
+
         Returns:
             Dictionary with p50, p95, p99, mean, max
         """
+        buckets = self._latency_buckets()
         if dimension == 'overall':
-            latencies = list(self.latencies['overall'])
+            latencies = buckets['overall']['current']
         else:
-            latencies = list(self.latencies[dimension][key])
-        
+            latencies = buckets[dimension].get(key, [])
+
         if not latencies:
             return {'p50': 0, 'p95': 0, 'p99': 0, 'mean': 0, 'max': 0}
-        
-        latencies_array = np.array(latencies)
+
         return {
-            'p50': float(np.percentile(latencies_array, 50)),
-            'p95': float(np.percentile(latencies_array, 95)),
-            'p99': float(np.percentile(latencies_array, 99)),
-            'mean': float(np.mean(latencies_array)),
-            'max': float(np.max(latencies_array))
+            'p50': percentile(latencies, 50),
+            'p95': percentile(latencies, 95),
+            'p99': percentile(latencies, 99),
+            'mean': mean(latencies),
+            'max': float(max(latencies))
         }
     
     def get_transaction_volume(self, dimension: str = 'overall', key: str = 'current') -> int:
@@ -328,7 +344,7 @@ class PaymentObserver:
         """Get a summary of current observations"""
         return {
             'timestamp': datetime.now().isoformat(),
-            'window_size_minutes': self.window_size.seconds / 60,
+            'window_size_minutes': self.window_size.total_seconds() / 60,
             'total_transactions': len(self.transactions_window),
             'overall_success_rate': self.get_success_rate('overall', 'current'),
             'overall_latency': self.get_latency_stats('overall'),

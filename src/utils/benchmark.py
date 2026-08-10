@@ -15,6 +15,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.agent.core import PaymentAgent
+from src.models.state import DecisionContext
 from src.simulation.payment_simulator import PaymentSimulator
 
 
@@ -74,21 +75,16 @@ def run_benchmark(num_cycles: int = 20, transactions_per_cycle: int = 50):
         
         # Measure decision making
         decision_start = time.time()
-        if patterns:
-            for pattern in patterns[:3]:  # Limit for speed
-                # Build context and decide (simplified - just measure the time)
-                try:
-                    from src.agent.decision_maker import DecisionContext
-                    context = DecisionContext(
-                        pattern=pattern,
-                        hypotheses=[],
-                        current_state=agent.state,
-                        observer_stats=agent.observer.get_statistics(),
-                        historical_actions=[]
-                    )
-                    agent.decision_maker.decide(context)
-                except Exception:
-                    pass  # Ignore errors, just measure time
+        for pattern in patterns[:3]:  # Limit for speed
+            context = DecisionContext(
+                pattern=pattern,
+                hypotheses=agent.reasoner.generate_hypotheses(pattern),
+                available_actions=[],
+                current_state=agent.state,
+                historical_outcomes=agent.learner.action_outcomes,
+                constraints={},
+            )
+            agent.decision_maker.rank_actions(context)
         decision_time = (time.time() - decision_start) * 1000
         decision_times.append(decision_time)
         

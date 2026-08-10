@@ -18,8 +18,9 @@ from src.models.state import (
     Action,
     ActionType,
     AgentState,
-    RiskLevel,
     AuthorizationLevel,
+    RiskLevel,
+    required_authorization,
 )
 from src.agent.executor import PaymentExecutor
 
@@ -28,6 +29,9 @@ logger = logging.getLogger(__name__)
 # ── Shared singleton state ──────────────────────────────────────────────────
 executor = PaymentExecutor()
 agent_state = AgentState()
+
+# Actions the model proposed that need a human before they can run.
+pending_approvals: dict = {}
 
 
 class MockObserver:
@@ -51,17 +55,51 @@ def _create_action(
     parameters: dict,
     risk_level: RiskLevel = RiskLevel.MEDIUM,
 ) -> Action:
+    """
+    Build an Action for a model-invoked tool.
+
+    The authorization level comes from the shared action->tier map, never from
+    the caller. Hardcoding AUTOMATIC here is what previously let the model
+    suppress a payment method with no approver, straight past the safety model
+    the docs advertise.
+    """
     return Action(
         action_id=str(uuid4()),
         action_type=action_type,
         target=target,
         parameters=parameters,
         risk_level=risk_level,
-        authorization_level=AuthorizationLevel.AUTOMATIC,
-        estimated_impact={"success_rate": 0.05},
-        reasoning="Triggered automatically via Gemini Agent",
+        authorization_level=required_authorization(action_type),
+        estimated_impact={"success_rate_delta": 0.05},
+        reasoning="Triggered via LLM agent tool call",
         confidence=0.9,
         created_at=datetime.now(),
+    )
+
+
+def _dispatch(action: Action) -> str:
+    """
+    Run an action if its tier permits, otherwise queue it for a human.
+
+    Returns a message written for the model, so it understands the difference
+    between "done" and "waiting on a person" and can say so to the operator.
+    """
+    if action.authorization_level == AuthorizationLevel.AUTOMATIC:
+        success, message = executor.execute(action, agent_state, observer)
+        return f"Success: {success}\nMessage: {message}"
+
+    pending_approvals[action.action_id] = action
+    tier = action.authorization_level.value
+    logger.info(
+        "Action %s (%s) queued for approval [%s]",
+        action.action_id, action.action_type.value, tier
+    )
+    return (
+        f"Success: False\n"
+        f"Message: {action.action_type.value} on '{action.target}' requires "
+        f"{tier} authorization and was NOT executed. It is queued as "
+        f"approval id {action.action_id}. A human operator must approve it via "
+        f"approve_pending_action before it takes effect."
     )
 
 
@@ -83,8 +121,7 @@ def execute_circuit_breaker(issuer: str, duration_minutes: int = 10) -> str:
         parameters={"issuer": issuer, "duration_minutes": duration_minutes},
         risk_level=RiskLevel.HIGH,
     )
-    success, message = executor.execute(action, agent_state, observer)
-    return f"Success: {success}\nMessage: {message}"
+    return _dispatch(action)
 
 
 def adjust_retry_strategy(
@@ -115,8 +152,7 @@ def adjust_retry_strategy(
         parameters=parameters,
         risk_level=RiskLevel.LOW,
     )
-    success, message = executor.execute(action, agent_state, observer)
-    return f"Success: {success}\nMessage: {message}"
+    return _dispatch(action)
 
 
 def change_routing(
@@ -142,8 +178,7 @@ def change_routing(
         parameters=parameters,
         risk_level=RiskLevel.MEDIUM,
     )
-    success, message = executor.execute(action, agent_state, observer)
-    return f"Success: {success}\nMessage: {message}"
+    return _dispatch(action)
 
 
 def suppress_payment_method(payment_method: str) -> str:
@@ -162,8 +197,7 @@ def suppress_payment_method(payment_method: str) -> str:
         parameters=parameters,
         risk_level=RiskLevel.HIGH,
     )
-    success, message = executor.execute(action, agent_state, observer)
-    return f"Success: {success}\nMessage: {message}"
+    return _dispatch(action)
 
 
 def alert_ops_team(pattern_type: str, severity: float, description: str) -> str:
@@ -188,8 +222,7 @@ def alert_ops_team(pattern_type: str, severity: float, description: str) -> str:
         parameters=parameters,
         risk_level=RiskLevel.LOW,
     )
-    success, message = executor.execute(action, agent_state, observer)
-    return f"Success: {success}\nMessage: {message}"
+    return _dispatch(action)
 
 
 def monitor_and_rollback() -> str:
@@ -223,7 +256,61 @@ def get_agent_state() -> str:
     return json.dumps(state_info, default=str, indent=2)
 
 
-# ── Convenience list for Gemini tool registration ───────────────────────────
+def list_pending_approvals() -> str:
+    """List actions that were proposed but are waiting on human authorization.
+
+    Returns:
+        A JSON string describing each pending action and why it is held.
+    """
+    if not pending_approvals:
+        return "No actions are awaiting approval."
+
+    return json.dumps([
+        {
+            "approval_id": action.action_id,
+            "action": action.action_type.value,
+            "target": action.target,
+            "required_authorization": action.authorization_level.value,
+            "risk_level": action.risk_level.value,
+            "parameters": action.parameters,
+            "proposed_at": action.created_at.isoformat(),
+        }
+        for action in pending_approvals.values()
+    ], indent=2)
+
+
+def approve_pending_action(approval_id: str, approver: str) -> str:
+    """Approve and execute an action that was held for human authorization.
+
+    This represents a human operator signing off. The agent should surface the
+    pending action to a person rather than calling this on its own behalf.
+
+    Args:
+        approval_id: The approval id returned when the action was queued.
+        approver: Identity of the human approving the action.
+
+    Returns:
+        A status string indicating whether the action executed.
+    """
+    action = pending_approvals.pop(approval_id, None)
+    if action is None:
+        return f"Success: False\nMessage: No pending action with id {approval_id}"
+
+    if not approver or not approver.strip():
+        pending_approvals[approval_id] = action
+        return "Success: False\nMessage: An approver identity is required"
+
+    action.approver = approver
+    success, message = executor.execute(action, agent_state, observer)
+    if not success:
+        pending_approvals[approval_id] = action
+    return f"Success: {success}\nMessage: {message} (approved by {approver})"
+
+
+# ── Convenience list for LLM tool registration ──────────────────────────────
+# approve_pending_action is deliberately excluded: authorising an action is a
+# human's job, and handing the model that tool would let it approve its own
+# proposals, which defeats the entire purpose of the tier.
 ALL_TOOLS = [
     execute_circuit_breaker,
     adjust_retry_strategy,
@@ -232,4 +319,5 @@ ALL_TOOLS = [
     alert_ops_team,
     monitor_and_rollback,
     get_agent_state,
+    list_pending_approvals,
 ]

@@ -7,6 +7,12 @@ from src.agent.core import PaymentAgent
 from src.models.state import PaymentMethod
 from src.simulation.payment_simulator import PaymentSimulator
 
+# Cycle cadences. Driven off an explicit next-run timestamp rather than
+# `int(elapsed) % N == 0`, which silently skips any N the sleep interval
+# never lands on exactly.
+CYCLE_INTERVAL = 15
+CONTINUOUS_CYCLE_INTERVAL = 30
+
 
 def run_demo_scenario():
     
@@ -17,13 +23,18 @@ def run_demo_scenario():
     
     print("Initializing payment agent...")
     agent = PaymentAgent(
-        window_size_minutes=5, 
-        analysis_interval_seconds=15,  
-        auto_approve_low_risk=True
+        window_size_minutes=5,
+        analysis_interval_seconds=CYCLE_INTERVAL,
+        auto_approve_low_risk=True,
+        # The demo only runs for a few minutes, so score outcomes sooner than
+        # the production default or the learning phase never has any input.
+        outcome_evaluation_seconds=45
     )
     
     print("Initializing payment simulator...")
-    simulator = PaymentSimulator(base_success_rate=0.96)
+    # The simulated world obeys the agent's control plane, so interventions
+    # actually move the metrics the agent then observes.
+    simulator = PaymentSimulator(base_success_rate=0.96, control_plane=agent.state)
     
     print("\n" + "=" * 80)
     print("PHASE 1: NORMAL OPERATION (60 seconds)")
@@ -33,13 +44,14 @@ def run_demo_scenario():
     
     # Phase 1: Normal operation
     start_time = time.time()
+    next_cycle = start_time + CYCLE_INTERVAL
     while time.time() - start_time < 60:
         # Generate transactions
         transactions = simulator.generate_stream(count=20, start_time=datetime.now())
         agent.process_batch(transactions)
-        
-        # Run agent cycle every 15 seconds
-        if int(time.time() - start_time) % 15 == 0:
+
+        if time.time() >= next_cycle:
+            next_cycle = time.time() + CYCLE_INTERVAL
             results = agent.run_cycle()
             print(f"[{datetime.now().strftime('%H:%M:%S')}] "
                   f"Cycle #{results['cycle']}: "
@@ -65,11 +77,13 @@ def run_demo_scenario():
     simulator.inject_issuer_degradation(issuer='HDFC_BANK', severity=0.6, duration_seconds=90)
     
     start_time = time.time()
+    next_cycle = start_time + CYCLE_INTERVAL
     while time.time() - start_time < 90:
         transactions = simulator.generate_stream(count=20, start_time=datetime.now())
         agent.process_batch(transactions)
-        
-        if int(time.time() - start_time) % 15 == 0:
+
+        if time.time() >= next_cycle:
+            next_cycle = time.time() + CYCLE_INTERVAL
             results = agent.run_cycle()
             
             print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Cycle #{results['cycle']}:")
@@ -103,6 +117,7 @@ def run_demo_scenario():
     simulator.inject_retry_storm(duration_seconds=60)
     
     start_time = time.time()
+    next_cycle = start_time + CYCLE_INTERVAL
     while time.time() - start_time < 60:
         # Generate more retries during storm
         transactions = simulator.generate_stream(count=15, start_time=datetime.now())
@@ -112,8 +127,9 @@ def run_demo_scenario():
             txn.retry_count = 2
         
         agent.process_batch(transactions + retries)
-        
-        if int(time.time() - start_time) % 15 == 0:
+
+        if time.time() >= next_cycle:
+            next_cycle = time.time() + CYCLE_INTERVAL
             results = agent.run_cycle()
             
             print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Cycle #{results['cycle']}:")
@@ -139,7 +155,8 @@ def run_demo_scenario():
     print(f"  Total Cycles: {final_status['cycle_count']}")
     print(f"  Patterns Detected: {final_status['performance']['patterns_detected']}")
     print(f"  Actions Executed: {final_status['performance']['actions_executed']}")
-    print(f"  Success Rate: {final_status['performance']['actions_successful']}/{final_status['performance']['actions_executed']}")
+    print(f"  Actions Attempted: {final_status['performance']['actions_attempted']}")
+    print(f"  Alerts Raised: {final_status['performance']['alerts_raised']}")
     
     if final_status['active_interventions']:
         print(f"\nActive Interventions:")
@@ -175,10 +192,11 @@ def run_continuous(duration_minutes: int = 60):
         auto_approve_low_risk=True
     )
     
-    simulator = PaymentSimulator()
+    simulator = PaymentSimulator(control_plane=agent.state)
     
     # Run for specified duration
     start_time = time.time()
+    next_cycle = start_time + CONTINUOUS_CYCLE_INTERVAL
     scenario_interval = 300  # Inject scenario every 5 minutes
     last_scenario_time = 0
     
@@ -188,7 +206,8 @@ def run_continuous(duration_minutes: int = 60):
         agent.process_batch(transactions)
         
         # Run agent cycle
-        if int(time.time() - start_time) % 30 == 0:
+        if time.time() >= next_cycle:
+            next_cycle = time.time() + CONTINUOUS_CYCLE_INTERVAL
             results = agent.run_cycle()
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Cycle #{results['cycle']}")
         
