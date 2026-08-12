@@ -106,7 +106,19 @@ class Experiment:
         )
 
     def summary(self) -> Dict:
+        """
+        What a reader is told about this experiment.
+
+        `significant` is gated on has_sufficient_data(), not only on the
+        p-value. The gate already governed whether an outcome was worth
+        learning from, but not what the console displayed - so a run with
+        three control transactions announced "improved success rate by 94.7%
+        (significant)". That is a stronger claim than the agent itself was
+        willing to act on, made to the person deciding whether to trust it.
+        Either the evidence is good enough for both or for neither.
+        """
         result = self.result()
+        sufficient = self.has_sufficient_data()
         return {
             'experiment_id': self.experiment_id,
             'action_id': self.action_id,
@@ -116,12 +128,21 @@ class Experiment:
             'active': self.active,
             'treatment': {'successes': self.treatment.successes, 'total': self.treatment.total},
             'control': {'successes': self.control.successes, 'total': self.control.total},
+            'sufficient_data': sufficient,
             'lift': result.difference if result else None,
             'lift_ci': [result.lower, result.upper] if result else None,
             'p_value': result.p_value if result else None,
-            'significant': result.significant if result else False,
-            'verdict': result.describe() if result else 'insufficient data',
+            'significant': bool(result and result.significant and sufficient),
+            'verdict': self._verdict(result, sufficient),
         }
+
+    @staticmethod
+    def _verdict(result, sufficient: bool) -> str:
+        if result is None:
+            return 'insufficient data'
+        if not sufficient:
+            return f"still collecting - {result.describe(conclusive=False)}"
+        return result.describe()
 
 
 class ExperimentRegistry:

@@ -264,3 +264,71 @@ def test_experiment_summary_is_serialisable():
         assert 'verdict' in summary
         assert 'lift' in summary
         assert isinstance(summary['significant'], bool)
+
+
+# ── What a reader is told ────────────────────────────────────────────────────
+
+def fill(experiment, treatment=(0, 0), control=(0, 0)):
+    """Record (successes, total) into each arm directly."""
+    t_ok, t_n = treatment
+    c_ok, c_n = control
+    for i in range(t_n):
+        experiment.treatment.record(i < t_ok)
+    for i in range(c_n):
+        experiment.control.record(i < c_ok)
+    return experiment
+
+
+def new_experiment():
+    return ExperimentRegistry().start('act-1', 'route_change', 'SBI')
+
+
+def test_a_thin_control_arm_is_not_announced_as_significant():
+    """
+    The regression. A live run with three control transactions rendered
+    "improved success rate by 94.7% ... significant" on the console - a
+    stronger claim than the agent itself would act on, made to the person
+    deciding whether to trust it. has_sufficient_data() already governed what
+    the learner would believe; it now governs what the console says too.
+    """
+    experiment = fill(new_experiment(), treatment=(36, 38), control=(0, 3))
+    summary = experiment.summary()
+
+    assert not summary['sufficient_data']
+    assert not summary['significant']
+    assert 'still collecting' in summary['verdict']
+    # And the sentence must not assert and retract the same claim
+    assert 'significant' not in summary['verdict']
+    assert 'too few observations to conclude' in summary['verdict']
+
+
+def test_the_measurement_is_still_reported_while_it_is_thin():
+    """Withholding the number would be its own kind of dishonesty."""
+    summary = fill(new_experiment(), treatment=(36, 38), control=(0, 3)).summary()
+
+    assert summary['lift'] is not None
+    assert summary['treatment'] == {'successes': 36, 'total': 38}
+    assert summary['control'] == {'successes': 0, 'total': 3}
+
+
+def test_a_well_powered_experiment_is_announced_as_significant():
+    experiment = fill(new_experiment(), treatment=(95, 100), control=(60, 100))
+    summary = experiment.summary()
+
+    assert summary['sufficient_data']
+    assert summary['significant']
+    assert 'still collecting' not in summary['verdict']
+
+
+def test_enough_data_and_no_effect_is_not_significant_either():
+    summary = fill(new_experiment(), treatment=(90, 100), control=(89, 100)).summary()
+
+    assert summary['sufficient_data']
+    assert not summary['significant']
+
+
+def test_the_reported_interval_stays_inside_the_possible_range():
+    summary = fill(new_experiment(), treatment=(36, 38), control=(0, 3)).summary()
+
+    lower, upper = summary['lift_ci']
+    assert -1.0 <= lower <= upper <= 1.0

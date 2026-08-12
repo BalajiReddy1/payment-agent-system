@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlparse
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.control.plane import diff  # noqa: E402
+from src import views  # noqa: E402
 from src.factory import build_system  # noqa: E402
 
 WEB_ROOT = Path(__file__).resolve().parent
@@ -107,128 +107,25 @@ class AgentRunner:
             })
             self.events = self.events[-300:]
 
-    # ── Read models for the console ──────────────────────────────────────────
+    # ── Read models ──────────────────────────────────────────────────────────
+    #
+    # The shapes themselves live in src/views.py, shared with the REST API so
+    # the two surfaces cannot drift apart. What belongs here is only what the
+    # API has no equivalent of: the cycle thread's liveness and the rolling
+    # history and event log this process keeps in memory.
 
     def health(self):
-        """
-        Liveness for container orchestrators.
-
-        Serving a page is not the same as running the agent: the HTTP thread
-        survives a dead cycle loop perfectly well. So this reports whether the
-        loop thread is alive and how many cycles it has completed, and answers
-        503 when the thread has stopped - otherwise a crashed agent would keep
-        passing its own health check.
-        """
         alive = self._thread is not None and self._thread.is_alive()
-        return {
-            'status': 'ok' if alive else 'degraded',
-            'loop_running': alive,
-            'cycles': self.agent.cycle_count,
-            'advisor': self.agent.advisor is not None,
-        }
+        return views.health(self.agent, loop_running=alive)
 
     def snapshot(self):
-        agent = self.agent
-        status = agent.get_status()
-        summary = agent.observer.get_summary()
-        plane = agent.state.control_plane
-
         with self._lock:
             history = list(self.history)
             events = list(self.events[-40:])
 
-        return {
-            'generated_at': datetime.now().isoformat(),
-            'agent': {
-                'active': status['is_active'],
-                'cycle': status['cycle_count'],
-                'phase': self._phase(),
-                'window_minutes': summary.get('window_size_minutes'),
-            },
-            'metrics': {
-                'success_rate': summary.get('overall_success_rate', 0),
-                'latency': summary.get('overall_latency', {}),
-                'transactions': summary.get('total_transactions', 0),
-                'retry_efficiency': summary.get('retry_efficiency', 0),
-            },
-            'counters': status['performance'],
-            'issuers': self._issuers(),
-            'incidents': status.get('incidents', []),
-            'approvals': status.get('approvals', []),
-            'experiments': status.get('experiments', []),
-            'interventions': status.get('active_interventions', []),
-            'control_plane': {
-                'revision': plane.revision,
-                'policy': plane.current.to_dict(),
-                'history': self._plane_history(plane),
-            },
-            'decisions': self._decisions(),
-            'scenarios': [
-                {'type': s['type'], 'expires_at': s['expires_at'].isoformat()}
-                for s in self.simulator.get_active_scenarios()
-            ],
-            'history': history,
-            'events': events,
-            'traffic': {
-                'rerouted': self.simulator.rerouted_count,
-                'held_out': self.simulator.control_count,
-                'method_switched': self.simulator.method_switch_count,
-            },
-        }
-
-    def _phase(self):
-        """A coarse state machine so the console can show what the agent is doing."""
-        if self.agent.incident_tracker.active():
-            return 'mitigating'
-        if self.agent.executor.get_active_interventions():
-            return 'monitoring'
-        return 'observing'
-
-    def _issuers(self):
-        health = self.agent.observer.get_issuer_health()
-        breakers = self.agent.state.active_circuit_breakers
-        rows = []
-        for issuer, stats in sorted(health.items()):
-            rows.append({
-                'issuer': issuer,
-                'success_rate': stats['success_rate'],
-                'volume': stats['volume'],
-                'p95': stats['p95_latency'],
-                'broken': issuer in breakers,
-            })
-        return sorted(rows, key=lambda r: r['success_rate'])
-
-    def _plane_history(self, plane, limit=12):
-        entries = []
-        for revision in plane.history(limit=limit):
-            parent = plane.get(revision.parent_revision)
-            entries.append({
-                'revision': revision.revision,
-                'at': revision.created_at.isoformat(),
-                'author': revision.author,
-                'reason': revision.reason,
-                'changes': diff(parent, revision) if parent else ['initial policy'],
-            })
-        return entries
-
-    def _decisions(self, limit=12):
-        log = self.agent.executor.get_execution_history(
-            limit=limit, exclude_types=('alert_ops', 'no_action')
+        return views.snapshot(
+            self.agent, self.simulator, history=history, events=events
         )
-        decisions = []
-        for entry in reversed(log):
-            decisions.append({
-                'action_id': entry['action_id'],
-                'type': entry['action_type'],
-                'target': entry['target'],
-                'at': entry['executed_at'],
-                'success': entry['success'],
-                'message': entry['message'],
-                'parameters': entry['parameters'],
-                'reasoning': entry.get('reasoning', ''),
-                'baseline': entry.get('baseline_metrics', {}),
-            })
-        return decisions
 
     # ── Commands ─────────────────────────────────────────────────────────────
 

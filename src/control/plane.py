@@ -356,7 +356,31 @@ def diff(
     lines += _diff_set('method suppression', before.suppressed_methods, after.suppressed_methods)
     lines += _diff_map('retry strategy', before.retry_strategies, after.retry_strategies)
     lines += _diff_map('routing override', before.routing_overrides, after.routing_overrides)
+    lines += _diff_holdouts(before.holdouts, after.holdouts)
 
+    return lines
+
+
+def _diff_holdouts(before: Mapping[str, float], after: Mapping[str, float]) -> List[str]:
+    """
+    Report holdout changes.
+
+    Omitted until now, which made a holdout the one policy change that could
+    enter the audit trail showing nothing at all - and it is the change that
+    most needs explaining, because it knowingly leaves a slice of real payments
+    unprotected in order to measure whether the protection works. An operator
+    reviewing the history saw a revision with an empty diff.
+    """
+    lines = []
+    for target in sorted(set(after) - set(before)):
+        lines.append(f"+ holdout: {target} = {after[target]:.0%} left as control")
+    for target in sorted(set(before) - set(after)):
+        lines.append(f"- holdout: {target}")
+    for target in sorted(set(before) & set(after)):
+        if before[target] != after[target]:
+            lines.append(
+                f"~ holdout: {target} = {before[target]:.0%} -> {after[target]:.0%}"
+            )
     return lines
 
 

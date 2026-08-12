@@ -240,9 +240,20 @@ class ComparisonResult:
         """True if the interval excludes zero at the requested confidence."""
         return self.lower > 0.0 or self.upper < 0.0
 
-    def describe(self) -> str:
+    def describe(self, conclusive: bool = True) -> str:
+        """
+        One line an operator can act on.
+
+        `conclusive=False` drops the significance clause, for callers that
+        know the sample is still too thin to conclude from. The alternative
+        was a sentence reading "still collecting ... p=0.000, significant",
+        which asserts and retracts the same claim in one breath.
+        """
         direction = "improved" if self.difference > 0 else "reduced"
-        verdict = "significant" if self.significant else "not significant"
+        verdict = (
+            ("significant" if self.significant else "not significant")
+            if conclusive else "too few observations to conclude"
+        )
         return (
             f"{direction} success rate by {abs(self.difference):.1%} "
             f"(95% CI {self.lower:+.1%} to {self.upper:+.1%}, "
@@ -289,21 +300,39 @@ def compare_proportions(
         z_score = 0.0
         p_value = 1.0
 
-    # Unpooled standard error for the interval
+    # Agresti-Caffo interval: add one success and one failure to each arm
+    # before computing the standard error.
+    #
+    # The plain Wald interval breaks exactly where a payment incident puts us.
+    # A control arm that fails every transaction has p=0, so its variance term
+    # is zero, the interval is computed as though only the treatment arm had
+    # any uncertainty, and it runs off the end of the scale - a real run here
+    # reported "+94.7% (95% CI +87.6% to +101.8%)", an upper bound that cannot
+    # exist for a difference of proportions. The adjustment costs two
+    # pseudo-observations per arm and holds its nominal coverage near 0 and 1.
+    adjusted_treatment = (treatment_successes + 1.0) / (treatment_total + 2.0)
+    adjusted_control = (control_successes + 1.0) / (control_total + 2.0)
     interval_variance = (
-        p_treatment * (1.0 - p_treatment) / treatment_total
-        + p_control * (1.0 - p_control) / control_total
+        adjusted_treatment * (1.0 - adjusted_treatment) / (treatment_total + 2.0)
+        + adjusted_control * (1.0 - adjusted_control) / (control_total + 2.0)
     )
     interval_error = math.sqrt(interval_variance) if interval_variance > 0 else 0.0
     z_critical = _z_for_confidence(confidence)
     margin = z_critical * interval_error
+    centre = adjusted_treatment - adjusted_control
+
+    # A difference of two proportions lives in [-1, 1]. Clamping is belt and
+    # braces on top of the adjustment: no arithmetic should hand an operator a
+    # bound describing something that cannot happen.
+    lower = max(-1.0, centre - margin)
+    upper = min(1.0, centre + margin)
 
     return ComparisonResult(
         treatment_rate=p_treatment,
         control_rate=p_control,
         difference=difference,
-        lower=difference - margin,
-        upper=difference + margin,
+        lower=lower,
+        upper=upper,
         z_score=z_score,
         p_value=p_value,
         treatment_n=treatment_total,

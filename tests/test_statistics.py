@@ -150,6 +150,72 @@ def test_comparison_describes_itself():
     assert 'improved' in text and 'CI' in text and 'p=' in text
 
 
+# ── Intervals that stay inside the possible ──────────────────────────────────
+
+def test_the_interval_cannot_leave_the_possible_range():
+    """
+    A difference of two proportions lives in [-1, 1]. The plain Wald interval
+    does not know that: a live run reported "+94.7% (95% CI +87.6% to
+    +101.8%)" - an upper bound describing something that cannot happen.
+    """
+    for treatment, t_n, control, c_n in [
+        (36, 38, 0, 3),      # the run that produced the bad bound
+        (1, 1, 0, 1),
+        (10, 10, 0, 10),
+        (0, 10, 10, 10),
+        (0, 3, 3, 3),
+    ]:
+        result = compare_proportions(treatment, t_n, control, c_n)
+        assert -1.0 <= result.lower <= result.upper <= 1.0, (
+            f"{treatment}/{t_n} vs {control}/{c_n} -> "
+            f"[{result.lower}, {result.upper}]"
+        )
+
+
+def test_a_zero_rate_arm_does_not_collapse_the_interval():
+    """
+    Where the Wald interval actually fails, and exactly where a payment
+    incident puts us: an arm failing every transaction has p=0, so its
+    variance term is zero and the interval is computed as though only one
+    arm carried any uncertainty.
+    """
+    result = compare_proportions(36, 38, 0, 3)
+
+    width = result.upper - result.lower
+    assert width > 0.4, (
+        f"three control observations cannot pin the effect to +/-{width/2:.1%}"
+    )
+
+
+def test_a_tiny_sample_gives_a_wide_interval_and_a_large_one_a_narrow_one():
+    small = compare_proportions(9, 10, 5, 10)
+    large = compare_proportions(900, 1000, 500, 1000)
+
+    assert (small.upper - small.lower) > 3 * (large.upper - large.lower)
+
+
+def test_the_interval_holds_its_nominal_coverage_near_the_boundary():
+    """
+    The property the adjustment exists for. Simulated because coverage is a
+    property of the procedure, not of any single interval it produces.
+    """
+    import random
+
+    random.seed(11)
+    true_difference = 0.10
+    covered = 0
+    trials = 2000
+
+    for _ in range(trials):
+        treatment = sum(random.random() < 1.00 for _ in range(40))
+        control = sum(random.random() < 0.90 for _ in range(40))
+        result = compare_proportions(treatment, 40, control, 40)
+        if result.lower <= true_difference <= result.upper:
+            covered += 1
+
+    assert covered / trials >= 0.93, f"95% interval covered {covered / trials:.1%}"
+
+
 # ── Sequential detection ─────────────────────────────────────────────────────
 
 def test_cusum_rejects_incoherent_parameters():

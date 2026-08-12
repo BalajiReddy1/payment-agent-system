@@ -15,6 +15,7 @@ from pydantic import BaseModel
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+from src import views
 from src.agent.core import PaymentAgent
 from src.factory import build_agent, build_simulator, build_settings
 from src.models.state import PaymentMethod, PaymentStatus, PaymentTransaction
@@ -73,6 +74,12 @@ class ScenarioInput(BaseModel):
     severity: float = 0.6
     duration_seconds: int = 120
     multiplier: float = 3.0
+
+
+class ApprovalDecision(BaseModel):
+    """An operator's verdict on a queued action."""
+    approver: str
+    note: str = ""
 
 
 class HealthResponse(BaseModel):
@@ -260,6 +267,82 @@ async def list_scenarios():
             for s in scenarios
         ]
     }
+
+
+# ── Parity with the console ──────────────────────────────────────────────────
+#
+# These read the same functions in src/views.py that the console serves, so the
+# two surfaces cannot answer differently. Everything below was previously
+# available only by looking at the console, which made the API a strictly worse
+# view of the same agent.
+
+
+@app.get("/snapshot")
+async def snapshot():
+    """
+    Everything needed to render the agent's state, as one consistent document.
+
+    Assembling this from several endpoints lets the parts disagree - metrics
+    from one cycle, control plane from the next - with no way for a reader to
+    tell.
+    """
+    return views.snapshot(get_agent(), get_simulator())
+
+
+@app.get("/incidents")
+async def list_incidents():
+    """Open and recently closed incidents, with the advisor's assessment."""
+    agent = get_agent()
+    return {"incidents": [i.summary() for i in agent.incident_tracker.all()]}
+
+
+@app.get("/experiments")
+async def list_experiments():
+    """
+    Holdout experiments and what they measured.
+
+    This is how an intervention's effect is known rather than assumed: a
+    concurrent untreated control group, not a before/after comparison against
+    a moving baseline.
+    """
+    return {"experiments": get_agent().get_status().get('experiments', [])}
+
+
+@app.get("/control-plane")
+async def get_control_plane():
+    """The current policy and the revision history that produced it."""
+    return views.control_plane(get_agent().state.control_plane)
+
+
+@app.get("/approvals")
+async def list_approvals():
+    """Actions the agent proposed but is not authorized to take alone."""
+    agent = get_agent()
+    return {"approvals": [r.summary() for r in agent.approvals.pending()]}
+
+
+@app.post("/approvals/{request_id}/approve")
+async def approve(request_id: str, decision: ApprovalDecision):
+    """
+    Authorize a queued action.
+
+    The approver is required, not defaulted: an approval with nobody's name
+    against it is an audit trail that records that permission was granted and
+    not who granted it.
+    """
+    ok, message = get_agent().approve(request_id, decision.approver)
+    if not ok:
+        raise HTTPException(status_code=409, detail=message)
+    return {"ok": True, "message": message}
+
+
+@app.post("/approvals/{request_id}/deny")
+async def deny(request_id: str, decision: ApprovalDecision):
+    """Refuse a queued action."""
+    ok, message = get_agent().deny(request_id, decision.approver, note=decision.note)
+    if not ok:
+        raise HTTPException(status_code=409, detail=message)
+    return {"ok": True, "message": message}
 
 
 if __name__ == "__main__":
