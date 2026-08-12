@@ -47,29 +47,56 @@ class PaymentLearner:
         self,
         action: Action,
         baseline_metrics: Dict,
-        actual_metrics: Dict
+        actual_metrics: Dict,
+        measured_lift=None
     ):
         """
         Record the outcome of an executed action.
-        
+
         Args:
             action: The executed action
             baseline_metrics: Metrics before action
             actual_metrics: Metrics after action
+            measured_lift: ComparisonResult from a concurrent holdout, when one
+                exists. This is the trustworthy measurement; the before/after
+                delta below is a fallback that cannot separate the action's
+                effect from the incident resolving on its own, and is recorded
+                as such so the two are never confused downstream.
         """
+        before_after_delta = (
+            actual_metrics.get('success_rate', 0) -
+            baseline_metrics.get('success_rate', 0)
+        )
+
+        if measured_lift is not None:
+            success_delta = measured_lift.difference
+            attribution = 'holdout'
+        else:
+            success_delta = before_after_delta
+            attribution = 'before_after'
+
         # Calculate actual impact
         actual_impact = {
-            'success_rate_delta': (
-                actual_metrics.get('success_rate', 0) -
-                baseline_metrics.get('success_rate', 0)
-            ),
+            'success_rate_delta': success_delta,
+            'before_after_delta': before_after_delta,
+            'attribution': attribution,
             'latency_delta': (
                 actual_metrics.get('avg_latency', 0) -
                 baseline_metrics.get('avg_latency', 0)
             ),
             'timestamp': datetime.now()
         }
-        
+
+        if measured_lift is not None:
+            actual_impact.update({
+                'lift_lower': measured_lift.lower,
+                'lift_upper': measured_lift.upper,
+                'p_value': measured_lift.p_value,
+                'significant': measured_lift.significant,
+                'treatment_n': measured_lift.treatment_n,
+                'control_n': measured_lift.control_n,
+            })
+
         # Compare to estimated impact
         estimated_impact = action.estimated_impact
         
@@ -316,8 +343,20 @@ class PaymentLearner:
         
         for outcomes in self.action_outcomes.values():
             for outcome in outcomes:
-                actual_success = outcome['actual_impact'].get('success_rate_delta', 0)
-                
+                impact = outcome['actual_impact']
+
+                # Only learn from outcomes that were actually measured against
+                # a control group and cleared significance. A before/after
+                # delta cannot distinguish "the intervention worked" from "the
+                # outage ended", and learning from that teaches the agent to
+                # repeat whatever it happened to be doing when things improved.
+                if impact.get('attribution') != 'holdout':
+                    continue
+                if not impact.get('significant'):
+                    continue
+
+                actual_success = impact.get('success_rate_delta', 0)
+
                 # Simplified: just track if objectives aligned with success
                 if actual_success > 0:
                     # This action was successful

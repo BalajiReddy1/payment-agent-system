@@ -51,6 +51,7 @@ def build_agent(
         'auto_approve_low_risk': settings.agent.auto_approve_low_risk,
         'min_severity_to_act': settings.agent.min_severity_to_act,
         'outcome_evaluation_seconds': settings.agent.outcome_evaluation_seconds,
+        'holdout_fraction': settings.agent.holdout_fraction,
         'journal': journal,
     }
     agent_kwargs.update(overrides)

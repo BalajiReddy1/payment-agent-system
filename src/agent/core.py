@@ -22,6 +22,7 @@ from src.agent.executor import PaymentExecutor
 from src.agent.learner import PaymentLearner
 from src.agent.observer import PaymentObserver
 from src.agent.reasoner import PaymentReasoner
+from src.analysis.experiment import ExperimentRegistry
 from src.control.plane import ControlPlane
 from src.store.journal import NullJournal
 
@@ -41,6 +42,7 @@ class PaymentAgent:
         auto_approve_low_risk: bool = True,
         min_severity_to_act: float = 0.3,
         outcome_evaluation_seconds: int = 300,
+        holdout_fraction: float = 0.10,
         journal=None
     ):
         """
@@ -54,6 +56,10 @@ class PaymentAgent:
             outcome_evaluation_seconds: How long an intervention must run before
                 its outcome is scored. Shorten it for demos; in production this
                 wants to be long enough for the effect to actually show up.
+            holdout_fraction: Share of affected traffic deliberately left
+                untreated so an intervention can be measured against a
+                concurrent control. Set to 0 to disable measurement - the
+                agent will still act, it just will not know whether it helped.
         """
         # Durable record of what the agent saw, concluded and did. Defaults to
         # a no-op so persistence stays opt-in and nothing has to branch on it.
@@ -65,6 +71,10 @@ class PaymentAgent:
         self.decision_maker = PaymentDecisionMaker()
         self.executor = PaymentExecutor()
         self.learner = PaymentLearner()
+
+        # Holdout experiments: how the agent finds out whether its
+        # interventions actually work, rather than assuming they did.
+        self.experiments = ExperimentRegistry(default_holdout=holdout_fraction)
 
         # Agent state. The control plane journals every revision it publishes.
         self.state = AgentState(control_plane=ControlPlane(journal=self.journal))
@@ -80,6 +90,10 @@ class PaymentAgent:
 
         # Decision score an action must reach to be worth executing
         self.min_action_score = 0.0
+
+        # Observations required in each experiment arm before an intervention's
+        # measured lift is trusted enough to record
+        self.min_experiment_observations = 30
         
         # Logging
         self.logger = logging.getLogger(__name__)
@@ -99,11 +113,13 @@ class PaymentAgent:
         This is the entry point for streaming payment data.
         """
         self.observer.ingest_transaction(transaction)
+        self.experiments.record(transaction)
         self.journal.record_transactions([transaction])
 
     def process_batch(self, transactions: List[PaymentTransaction]):
         """Process a batch of transactions"""
         self.observer.ingest_batch(transactions)
+        self.experiments.record_batch(transactions)
         self.journal.record_transactions(transactions)
     
     def run_cycle(self) -> Dict:
@@ -294,6 +310,7 @@ class PaymentAgent:
                 continue
 
             self.memory.add_action(action)
+            self._start_experiment(action)
             self.journal.record_action(action, cycle=self.cycle_count, score=score)
 
             results['actions_taken'].append({
@@ -332,6 +349,61 @@ class PaymentAgent:
 
         return False, "requires explicit human approval (manual)"
 
+    def _stop_experiment(self, action_id: str):
+        """End an intervention's experiment and release its holdout."""
+        experiment = self.experiments.stop(action_id)
+        if experiment is None:
+            return
+
+        self.state.control_plane.clear_holdout(
+            experiment.target,
+            author='agent',
+            reason=f'{experiment.experiment_id} ended',
+            action_id=action_id,
+        )
+
+        result = experiment.result()
+        if result:
+            self.logger.info(
+                "%s on %s: %s",
+                experiment.experiment_id, experiment.target, result.describe()
+            )
+
+    def _start_experiment(self, action):
+        """
+        Begin measuring an intervention against a concurrent holdout.
+
+        Only for interventions with a definable affected population - there is
+        no meaningful control group for a global timeout change.
+        """
+        if self.experiments.default_holdout <= 0:
+            return
+        if action.action_type not in (ActionType.CIRCUIT_BREAKER, ActionType.METHOD_SUPPRESS):
+            return
+
+        target = (
+            action.parameters.get('issuer')
+            or action.parameters.get('payment_method')
+            or action.target
+        )
+
+        experiment = self.experiments.start(
+            action_id=action.action_id,
+            action_type=action.action_type.value,
+            target=target,
+        )
+        self.state.control_plane.set_holdout(
+            target,
+            experiment.holdout_fraction,
+            author='agent',
+            reason=f'holdout for {experiment.experiment_id}',
+            action_id=action.action_id,
+        )
+        self.logger.info(
+            "Started %s: %.0f%% of %s traffic held out as control",
+            experiment.experiment_id, experiment.holdout_fraction * 100, target
+        )
+
     def _emit_alert(self, pattern, results: Dict):
         """Send an ops notification for a pattern, alongside any mitigation."""
         alert = self.decision_maker.create_alert_action(pattern)
@@ -355,6 +427,11 @@ class PaymentAgent:
         results['rollbacks_executed'] = rolled_back
         results['expired_interventions'] = self.executor.expired_actions[expired_before:]
 
+        # An intervention that has ended stops accruing experiment data, and
+        # its holdout is released so traffic returns to normal routing.
+        for action_id in rolled_back + results['expired_interventions']:
+            self._stop_experiment(action_id)
+
         if rolled_back:
             self.logger.warning(f"Rolled back {len(rolled_back)} actions")
     
@@ -377,14 +454,35 @@ class PaymentAgent:
 
             settled = action.completed_at is not None
             elapsed = (datetime.now() - action.executed_at).total_seconds()
-            if not settled and elapsed < self.outcome_evaluation_seconds:
-                continue
+
+            # A concurrent control group, where one exists, is the honest
+            # measure. Before/after is confounded by everything else that
+            # changed meanwhile - above all by the incident resolving itself.
+            experiment = self.experiments.for_action(action.action_id)
+
+            if experiment is not None:
+                # Wait for the experiment to gather enough traffic in both
+                # arms. Scoring the instant the action executes - before any
+                # transaction has been through it - would record a
+                # measurement of nothing, and outcomes are recorded once.
+                ready = experiment.has_sufficient_data(self.min_experiment_observations)
+                if not ready and not settled:
+                    continue
+                measured = experiment.result() if ready else None
+            else:
+                if not settled and elapsed < self.outcome_evaluation_seconds:
+                    continue
+                measured = None
 
             baseline = self.executor.baseline_for_action(action.action_id)
-            if baseline:
-                self.learner.record_outcome(action, baseline, current_metrics)
-                self.journal.record_outcome(action, baseline, current_metrics)
-                self.journal.record_action(action, cycle=self.cycle_count)
+            if not baseline:
+                continue
+
+            self.learner.record_outcome(
+                action, baseline, current_metrics, measured_lift=measured
+            )
+            self.journal.record_outcome(action, baseline, current_metrics)
+            self.journal.record_action(action, cycle=self.cycle_count)
 
         # Get learning summary
         learning_summary = self.learner.get_learning_summary()
@@ -392,6 +490,9 @@ class PaymentAgent:
             'total_outcomes': learning_summary['total_outcomes_recorded'],
             'top_actions': len(learning_summary['top_actions'])
         }
+        results['experiments'] = [
+            e.summary() for e in self.experiments.experiments.values()
+        ]
         
         # Periodically update decision weights
         if self.cycle_count % 10 == 0:
@@ -435,7 +536,8 @@ class PaymentAgent:
                 }
                 for action in self.executor.get_active_interventions()
             ],
-            'learning_summary': self.learner.get_learning_summary()
+            'learning_summary': self.learner.get_learning_summary(),
+            'experiments': [e.summary() for e in self.experiments.experiments.values()]
         }
     
     def run_continuous(self, duration_seconds: Optional[int] = None):

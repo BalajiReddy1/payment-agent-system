@@ -5,9 +5,10 @@ Generates realistic payment transaction streams with various failure scenarios.
 
 import random
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
 from uuid import uuid4
 
+from src.analysis.experiment import CONTROL, ExperimentRegistry
 from src.models.state import PaymentMethod, PaymentStatus, PaymentTransaction
 
 
@@ -53,6 +54,7 @@ class PaymentSimulator:
         self.rerouted_count = 0
         self.method_switch_count = 0
         self.retries_suppressed_count = 0
+        self.control_count = 0
 
         # Available issuers
         self.issuers = [
@@ -103,11 +105,15 @@ class PaymentSimulator:
             timestamp = datetime.now()
         
         self.transaction_count += 1
+        transaction_id = str(uuid4())
 
         # Select payment method (weighted random), honouring suppressions
         methods, weights = zip(*self.payment_methods)
         payment_method = random.choices(methods, weights=weights)[0]
-        payment_method = self._apply_method_suppression(payment_method)
+        original_method = payment_method
+        payment_method, method_arm = self._apply_method_suppression(
+            payment_method, transaction_id
+        )
 
         # Select other attributes
         region = random.choice(self.regions)
@@ -115,7 +121,17 @@ class PaymentSimulator:
 
         # Select issuer, honouring circuit breakers and routing overrides
         issuer = random.choice(self.issuers)
-        issuer, rerouted = self._apply_routing(issuer)
+        original_issuer = issuer
+        issuer, rerouted, issuer_arm = self._apply_routing(issuer, transaction_id)
+
+        # Whichever intervention this transaction was eligible for decides the
+        # experiment it belongs to; routing takes precedence when both apply.
+        if issuer_arm:
+            experiment_target, experiment_arm = original_issuer, issuer_arm
+        elif method_arm:
+            experiment_target, experiment_arm = original_method.value, method_arm
+        else:
+            experiment_target, experiment_arm = None, None
 
         # Determine if this is a retry, honouring retry-strategy limits
         is_retry = force_retry or self._should_retry(payment_method)
@@ -138,7 +154,7 @@ class PaymentSimulator:
         amount = round(random.lognormvariate(6, 1.5), 2)  # Log-normal distribution
         
         return PaymentTransaction(
-            transaction_id=str(uuid4()),
+            transaction_id=transaction_id,
             timestamp=timestamp,
             amount=amount,
             currency='INR',
@@ -153,7 +169,9 @@ class PaymentSimulator:
             is_retry=is_retry,
             original_transaction_id=str(uuid4()) if is_retry else None,
             region=region,
-            processor='rerouted' if rerouted else 'default'
+            processor='rerouted' if rerouted else 'default',
+            experiment_target=experiment_target,
+            experiment_arm=experiment_arm
         )
     
     def generate_stream(
@@ -210,17 +228,22 @@ class PaymentSimulator:
             return default
         return getattr(policy, attribute, default)
 
-    def _apply_routing(self, issuer: str) -> tuple:
+    def _apply_routing(self, issuer: str, transaction_id: str) -> tuple:
         """
         Apply circuit breakers and routing overrides to an issuer choice.
 
+        When a holdout is configured for the issuer, a deterministic slice of
+        its traffic is deliberately left on the failing issuer so the
+        intervention can be measured against a concurrent control group.
+
         Returns:
-            Tuple of (issuer to actually use, whether it was rerouted)
+            Tuple of (issuer to use, whether rerouted, experiment arm or None)
         """
         breakers = self._cp('circuit_breakers', frozenset())
         overrides = self._cp('routing_overrides', {})
 
         divert = issuer in breakers
+        override_applies = False
 
         if not divert:
             # A routing override diverts a percentage of the issuer's traffic
@@ -229,33 +252,58 @@ class PaymentSimulator:
                 reduce_pct = override.get('reduce_routing_pct', 0) or 0
                 if reduce_pct and random.random() < reduce_pct / 100.0:
                     divert = True
+                    override_applies = True
 
         if not divert:
-            return issuer, False
+            return issuer, False, None
+
+        arm = self._arm_for(issuer, transaction_id)
+        if arm == CONTROL:
+            # Held out on purpose: this transaction keeps hitting the issuer
+            # the agent is trying to protect it from.
+            self.control_count += 1
+            return issuer, False, arm
 
         alternatives = [i for i in self.issuers if i != issuer and i not in breakers]
         if not alternatives:
             # Nowhere healthy to send it; the breaker cannot help here
-            return issuer, False
+            return issuer, False, arm
 
         self.rerouted_count += 1
-        return random.choice(alternatives), True
+        return random.choice(alternatives), True, arm
 
-    def _apply_method_suppression(self, method: PaymentMethod) -> PaymentMethod:
-        """Swap a suppressed payment method for one that is still offered."""
+    def _arm_for(self, target: str, transaction_id: str) -> Optional[str]:
+        """Experiment arm for a transaction, or None when no holdout is set."""
+        holdout = self._cp('holdouts', {}).get(target)
+        if not holdout:
+            return None
+        return ExperimentRegistry.assign(transaction_id, holdout)
+
+    def _apply_method_suppression(self, method: PaymentMethod, transaction_id: str) -> tuple:
+        """
+        Swap a suppressed payment method for one that is still offered.
+
+        Returns:
+            Tuple of (method to use, experiment arm or None)
+        """
         suppressed = self._cp('suppressed_methods', frozenset())
         if not suppressed or method.value not in suppressed:
-            return method
+            return method, None
+
+        arm = self._arm_for(method.value, transaction_id)
+        if arm == CONTROL:
+            self.control_count += 1
+            return method, arm
 
         alternatives = [
             m for m, _ in self.payment_methods
             if m.value not in suppressed
         ]
         if not alternatives:
-            return method
+            return method, arm
 
         self.method_switch_count += 1
-        return random.choice(alternatives)
+        return random.choice(alternatives), arm
 
     def _retry_strategy_for(self, method: PaymentMethod) -> Dict:
         """Merge the global and per-method retry strategies in force."""

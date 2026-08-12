@@ -114,6 +114,10 @@ class PaymentTransaction:
     original_transaction_id: Optional[str] = None
     region: str = "unknown"
     processor: str = "default"
+    # Set when the transaction was part of a holdout experiment, so its
+    # outcome can be attributed to treatment or control.
+    experiment_target: Optional[str] = None
+    experiment_arm: Optional[str] = None
     
     def to_dict(self) -> dict:
         """Convert to dictionary"""
@@ -133,7 +137,9 @@ class PaymentTransaction:
             'is_retry': self.is_retry,
             'original_transaction_id': self.original_transaction_id,
             'region': self.region,
-            'processor': self.processor
+            'processor': self.processor,
+            'experiment_target': self.experiment_target,
+            'experiment_arm': self.experiment_arm
         }
 
 

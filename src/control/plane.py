@@ -51,6 +51,10 @@ class ControlPlaneRevision:
     retry_strategies: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     routing_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
+    # Target -> fraction of affected traffic deliberately left untreated, so
+    # the intervention can be measured against a concurrent control group.
+    holdouts: Dict[str, float] = field(default_factory=dict)
+
     def is_empty(self) -> bool:
         """True if no intervention is in force."""
         return not (
@@ -72,6 +76,7 @@ class ControlPlaneRevision:
             'suppressed_methods': sorted(self.suppressed_methods),
             'retry_strategies': _freeze(self.retry_strategies),
             'routing_overrides': _freeze(self.routing_overrides),
+            'holdouts': dict(self.holdouts),
         }
 
 
@@ -184,6 +189,17 @@ class ControlPlane:
         overrides.pop(target, None)
         return self._publish(routing_overrides=overrides, **meta)
 
+    def set_holdout(self, target: str, fraction: float, **meta) -> ControlPlaneRevision:
+        """Withhold a fraction of a target's traffic from its intervention."""
+        holdouts = dict(self.current.holdouts)
+        holdouts[target] = fraction
+        return self._publish(holdouts=holdouts, **meta)
+
+    def clear_holdout(self, target: str, **meta) -> ControlPlaneRevision:
+        holdouts = dict(self.current.holdouts)
+        holdouts.pop(target, None)
+        return self._publish(holdouts=holdouts, **meta)
+
     def revert_to(
         self, revision: int, author: str, reason: str, action_id: Optional[str] = None
     ) -> ControlPlaneRevision:
@@ -206,6 +222,7 @@ class ControlPlane:
             suppressed_methods=target.suppressed_methods,
             retry_strategies=_freeze(target.retry_strategies),
             routing_overrides=_freeze(target.routing_overrides),
+            holdouts=dict(target.holdouts),
         )
 
     def undo_revision(
@@ -320,6 +337,7 @@ def _same_policy(a: ControlPlaneRevision, b: ControlPlaneRevision) -> bool:
         and a.suppressed_methods == b.suppressed_methods
         and a.retry_strategies == b.retry_strategies
         and a.routing_overrides == b.routing_overrides
+        and a.holdouts == b.holdouts
     )
 
 

@@ -17,6 +17,12 @@ agent:
   # How long an intervention must run before its outcome is scored
   outcome_evaluation_seconds: 300
 
+  # Share of affected traffic deliberately left untreated, so an
+  # intervention can be measured against a concurrent control group rather
+  # than against "before". This is real traffic knowingly left unprotected -
+  # the price of knowing whether the protection works. Set to 0 to disable.
+  holdout_fraction: 0.10
+
 # Pattern Detection Thresholds
 thresholds:
   # Minimum confidence to report a pattern

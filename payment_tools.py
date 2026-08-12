@@ -23,6 +23,7 @@ from src.models.state import (
     required_authorization,
 )
 from src.agent.executor import PaymentExecutor
+from src.analysis.experiment import ExperimentRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,9 @@ agent_state = AgentState()
 
 # Actions the model proposed that need a human before they can run.
 pending_approvals: dict = {}
+
+# Holdout experiments measuring whether the model's interventions helped
+experiments = ExperimentRegistry()
 
 
 class MockObserver:
@@ -255,6 +259,22 @@ def get_agent_state() -> str:
     return json.dumps(state_info, default=str, indent=2)
 
 
+def get_experiment_results() -> str:
+    """Show measured results for interventions running against a control group.
+
+    Each active intervention withholds a small share of affected traffic so its
+    effect can be measured against a concurrent control rather than against
+    "before". Use this to answer whether an action actually helped.
+
+    Returns:
+        A JSON string with treatment/control counts, lift and significance.
+    """
+    summaries = experiments.summaries()
+    if not summaries:
+        return "No experiments have been run."
+    return json.dumps(summaries, indent=2, default=str)
+
+
 def get_control_plane_history(limit: int = 10) -> str:
     """Show recent changes to payment policy, newest first.
 
@@ -347,5 +367,6 @@ ALL_TOOLS = [
     monitor_and_rollback,
     get_agent_state,
     get_control_plane_history,
+    get_experiment_results,
     list_pending_approvals,
 ]

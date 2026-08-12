@@ -139,10 +139,45 @@ Every decision includes:
 - **Decision**: What was chosen and why
 - **Expected Impact**: Predicted outcomes
 
-### 7. 📚 Continuous Learning
-- Updates action weights based on outcomes
-- Tracks pattern detection accuracy
-- Refines decision strategies over time
+### 7. 📚 Continuous Learning — measured, not assumed
+When the agent intervenes it withholds a small share of the affected traffic
+(10% by default) as a **concurrent control group**, then compares the two arms
+*at the same time*, through the same outage:
+
+```
+exp-d4af0f90  circuit_breaker on AXIS_BANK
+  treatment: 367/406      control: 7/41
+  verdict  : improved success rate by 73.3%
+             (95% CI +61.5% to +85.2%, p=0.000, significant)
+```
+
+This matters because the obvious alternative — compare before with after — is
+confounded by everything else that changed, above all by the incident
+resolving on its own. In the run above, before/after reported **+6.5%** while
+the holdout measured **+70.1%**: an order of magnitude apart. The learner only
+adjusts its weights on outcomes attributed to a holdout *and* significant; an
+unmeasured before/after delta is recorded but never learned from.
+
+The cost is stated plainly: the holdout is real traffic knowingly left
+unprotected. That is the price of knowing whether the protection works, and
+`holdout_fraction: 0` in config turns it off — the agent still acts, it just
+stops finding out whether acting helped.
+
+### 7d. 📐 Statistical Detection
+Confidence is a posterior probability, not a score. The same observed 75%
+success rate yields P(degraded) of 12% / 73% / 100% for 4, 40 and 400
+observations, so thin evidence no longer looks like a crisis:
+
+```
+Success rate: 20.83% (baseline: 95.00%)
+Posterior estimate: 54.5% (95% CI 39.9%-68.8%)
+P(rate below baseline - 8%) = 100.0%
+Sequential detector alarmed (log-odds 12.9 > 6.9)
+```
+
+Alongside it, a sequential log-likelihood-ratio detector catches a rate that
+has *shifted* rather than a window that happens to look bad — measured at ~4%
+false alarms per 2000 healthy transactions, detecting a drop to 80% in ~74.
 
 ### 7a. 🔁 Closed Control Loop
 The simulated payment world **reads the agent's control plane**. A circuit

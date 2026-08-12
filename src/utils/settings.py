@@ -34,6 +34,7 @@ class AgentSettings:
     auto_approve_low_risk: bool = True
     min_severity_to_act: float = 0.3
     outcome_evaluation_seconds: int = 300
+    holdout_fraction: float = 0.10
 
 
 @dataclass
@@ -141,6 +142,7 @@ class Settings:
         self.decision_weights.validate()
 
         _require_range('agent.min_severity_to_act', self.agent.min_severity_to_act, 0.0, 1.0)
+        _require_range('agent.holdout_fraction', self.agent.holdout_fraction, 0.0, 0.49)
         _require_range(
             'thresholds.min_pattern_confidence', self.thresholds.min_pattern_confidence, 0.0, 1.0
         )
@@ -164,6 +166,7 @@ class Settings:
             'auto_approve_low_risk': get_config_value(config, 'agent.auto_approve_low_risk'),
             'min_severity_to_act': get_config_value(config, 'agent.min_severity_to_act'),
             'outcome_evaluation_seconds': get_config_value(config, 'agent.outcome_evaluation_seconds'),
+            'holdout_fraction': get_config_value(config, 'agent.holdout_fraction'),
         })
 
         _assign(self.thresholds, {
