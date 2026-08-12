@@ -26,6 +26,7 @@ from src.agent.reasoner import PaymentReasoner
 from src.analysis.experiment import ExperimentRegistry
 from src.analysis.memory import IncidentMemory
 from src.control.plane import ControlPlane
+from src.safety.approvals import ApprovalQueue, needs_human
 from src.store.journal import NullJournal
 
 
@@ -87,6 +88,12 @@ class PaymentAgent:
         # measurably worked on them. This is where an experiment result stops
         # being a fact about the past and becomes a prior for the next decision.
         self.memory_of_incidents = IncidentMemory()
+
+        # Where an action goes when the agent has decided it is right but is
+        # not allowed to do it alone. Refusing and moving on - the previous
+        # behaviour - meant the agent concluded a breaker was needed and then
+        # told nobody.
+        self.approvals = ApprovalQueue()
 
         # Two-lane brain. The fast lane (detection above) runs every cycle in
         # microseconds; the advisor is the slow lane and fires once per
@@ -168,6 +175,7 @@ class PaymentAgent:
             'expired_interventions': [],
             'incidents_opened': [],
             'incidents_closed': [],
+            'approvals_lapsed': [],
             'learning_updates': {}
         }
         
@@ -383,21 +391,30 @@ class PaymentAgent:
 
     def _check_approval(self, action) -> tuple:
         """
-        Decide whether the agent may execute this action unattended.
+        Decide whether the agent may execute this action unattended, and if
+        not, put it somewhere a human will see it.
 
         Returns:
             Tuple of (allowed, reason)
         """
-        if action.authorization_level == AuthorizationLevel.AUTOMATIC:
-            return True, "automatic"
-
-        if action.authorization_level == AuthorizationLevel.SEMI_AUTOMATIC:
-            if self.auto_approve_low_risk and action.risk_level == RiskLevel.LOW:
+        if not needs_human(action, self.auto_approve_low_risk):
+            if (
+                action.authorization_level != AuthorizationLevel.AUTOMATIC
+                and not action.approver
+            ):
                 action.approver = 'agent:auto_low_risk'
                 return True, "auto-approved (low risk)"
-            return False, "awaiting operator approval (semi-automatic)"
+            return True, "automatic"
 
-        return False, "requires explicit human approval (manual)"
+        request = self.approvals.submit(
+            action,
+            requested_by='agent',
+            reason=f"{action.action_type.value} on {action.target}",
+        )
+        return False, (
+            f"queued for {action.authorization_level.value} approval "
+            f"as {request.request_id}"
+        )
 
     def _stop_experiment(self, action_id: str):
         """End an intervention's experiment and release its holdout."""
@@ -428,7 +445,13 @@ class PaymentAgent:
         """
         if self.experiments.default_holdout <= 0:
             return
-        if action.action_type not in (ActionType.CIRCUIT_BREAKER, ActionType.METHOD_SUPPRESS):
+        if action.action_type not in (
+            ActionType.CIRCUIT_BREAKER,
+            ActionType.ROUTE_CHANGE,
+            ActionType.METHOD_SUPPRESS,
+        ):
+            # Only interventions with a definable affected population can be
+            # measured; there is no control group for a global timeout change.
             return
 
         target = (
@@ -453,6 +476,28 @@ class PaymentAgent:
             "Started %s: %.0f%% of %s traffic held out as control",
             experiment.experiment_id, experiment.holdout_fraction * 100, target
         )
+
+    def approve(self, request_id: str, approver: str, note=None) -> tuple:
+        """
+        Grant a queued approval and execute the action.
+
+        Separate from proposing on purpose: the agent fills this queue and
+        never drains it.
+        """
+        ok, message, action = self.approvals.approve(request_id, approver, note)
+        if not ok:
+            return False, message
+
+        success, detail = self.executor.execute(action, self.state, self.observer)
+        if success:
+            self.memory.add_action(action)
+            self._start_experiment(action)
+            self.journal.record_action(action, cycle=self.cycle_count)
+        return success, f"{message}; {detail}"
+
+    def deny(self, request_id: str, approver: str, note=None) -> tuple:
+        """Refuse a queued approval."""
+        return self.approvals.deny(request_id, approver, note)
 
     def _consult_advisor(self, incident, pattern):
         """
@@ -511,6 +556,12 @@ class PaymentAgent:
 
         results['rollbacks_executed'] = rolled_back
         results['expired_interventions'] = self.executor.expired_actions[expired_before:]
+
+        # An approval nobody answered lapses rather than being granted by
+        # default; a tier that eventually approves itself is a delay, not a
+        # control.
+        for request in self.approvals.expire_stale():
+            results['approvals_lapsed'].append(request.request_id)
 
         # An intervention that has ended stops accruing experiment data, and
         # its holdout is released so traffic returns to normal routing.
@@ -631,7 +682,8 @@ class PaymentAgent:
             ],
             'learning_summary': self.learner.get_learning_summary(),
             'experiments': [e.summary() for e in self.experiments.experiments.values()],
-            'incidents': [i.summary() for i in self.incident_tracker.all()[:20]]
+            'incidents': [i.summary() for i in self.incident_tracker.all()[:20]],
+            'approvals': self.approvals.summaries()
         }
     
     def run_continuous(self, duration_seconds: Optional[int] = None):

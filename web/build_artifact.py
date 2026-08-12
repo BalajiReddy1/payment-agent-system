@@ -35,6 +35,9 @@ PAGE = """<title>Payment Operations Console</title>
   font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--ink-3);
 }}
+.controls button:disabled {{
+  opacity: 0.45; cursor: not-allowed;
+}}
 .capture-note::before {{
   content: ""; width: 5px; height: 5px; border-radius: 50%;
   background: var(--ink-4);
@@ -109,6 +112,14 @@ PAGE = """<title>Payment Operations Console</title>
         <div class="panel-head"><span class="micro">Incidents</span><span class="hint">Detections collapsed into events</span></div>
         <div class="panel-body flush scroll" id="incidents"></div>
       </div>
+    </section>
+
+    <section class="panel" id="approvals-panel" hidden>
+      <div class="panel-head">
+        <span class="micro">Awaiting authorization</span>
+        <span class="hint">The agent decided these are needed but may not run them alone</span>
+      </div>
+      <div class="panel-body flush" id="approvals"></div>
     </section>
 
     <section class="panel">

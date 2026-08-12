@@ -14,6 +14,7 @@ from src.models.state import (
     DecisionContext,
     Pattern,
     RiskLevel,
+    required_authorization,
 )
 from src.utils.stats import clamp
 
@@ -43,8 +44,6 @@ class PaymentDecisionMaker:
             'risk': 0.15           # 15% weight on risk
         }
         
-        # Action configurations
-        self.action_configs = self._initialize_action_configs()
         
         # Impact limits
         self.impact_limits = {
@@ -54,58 +53,6 @@ class PaymentDecisionMaker:
             RiskLevel.CRITICAL: 1.00  # Can affect all traffic
         }
     
-    def _initialize_action_configs(self) -> Dict[ActionType, Dict]:
-        """Initialize configuration for each action type"""
-        return {
-            ActionType.ADJUST_RETRY: {
-                'risk_level': RiskLevel.LOW,
-                'authorization': AuthorizationLevel.AUTOMATIC,
-                'typical_cost_impact': 0.0,  # No additional cost
-                'typical_latency_impact': -50.0,  # May reduce latency
-                'typical_success_impact': 0.05,  # May improve success by 5%
-                'rollback_difficulty': 'easy'
-            },
-            ActionType.CIRCUIT_BREAKER: {
-                'risk_level': RiskLevel.MEDIUM,
-                'authorization': AuthorizationLevel.AUTOMATIC,
-                'typical_cost_impact': 0.02,  # $0.02 per transaction to alternative
-                'typical_latency_impact': -100.0,  # Faster to fail fast
-                'typical_success_impact': 0.15,  # Can improve success by 15%
-                'rollback_difficulty': 'easy'
-            },
-            ActionType.ROUTE_CHANGE: {
-                'risk_level': RiskLevel.MEDIUM,
-                'authorization': AuthorizationLevel.SEMI_AUTOMATIC,
-                'typical_cost_impact': 0.05,  # More expensive routing
-                'typical_latency_impact': 50.0,  # May add latency
-                'typical_success_impact': 0.10,  # Can improve success by 10%
-                'rollback_difficulty': 'medium'
-            },
-            ActionType.METHOD_SUPPRESS: {
-                'risk_level': RiskLevel.HIGH,
-                'authorization': AuthorizationLevel.MANUAL,
-                'typical_cost_impact': 0.0,
-                'typical_latency_impact': 0.0,
-                'typical_success_impact': -0.05,  # May reduce options for users
-                'rollback_difficulty': 'medium'
-            },
-            ActionType.ALERT_OPS: {
-                'risk_level': RiskLevel.LOW,
-                'authorization': AuthorizationLevel.AUTOMATIC,
-                'typical_cost_impact': 0.0,
-                'typical_latency_impact': 0.0,
-                'typical_success_impact': 0.0,
-                'rollback_difficulty': 'easy'
-            },
-            ActionType.NO_ACTION: {
-                'risk_level': RiskLevel.LOW,
-                'authorization': AuthorizationLevel.AUTOMATIC,
-                'typical_cost_impact': 0.0,
-                'typical_latency_impact': 0.0,
-                'typical_success_impact': 0.0,
-                'rollback_difficulty': 'easy'
-            }
-        }
     
     def rank_actions(
         self,
@@ -203,7 +150,7 @@ class PaymentDecisionMaker:
                     'route_to': 'alternative_issuers'
                 },
                 risk_level=RiskLevel.MEDIUM,
-                authorization_level=AuthorizationLevel.AUTOMATIC,
+                authorization_level=required_authorization(ActionType.CIRCUIT_BREAKER),
                 estimated_impact={
                     'success_rate_delta': 0.15,
                     'latency_delta_ms': -200.0,
@@ -226,7 +173,7 @@ class PaymentDecisionMaker:
                 'duration_minutes': 15
             },
             risk_level=RiskLevel.LOW,
-            authorization_level=AuthorizationLevel.AUTOMATIC,
+            authorization_level=required_authorization(ActionType.ROUTE_CHANGE),
             estimated_impact={
                 'success_rate_delta': 0.08,
                 'latency_delta_ms': 20.0,
@@ -255,7 +202,7 @@ class PaymentDecisionMaker:
                 'duration_minutes': 15
             },
             risk_level=RiskLevel.LOW,
-            authorization_level=AuthorizationLevel.AUTOMATIC,
+            authorization_level=required_authorization(ActionType.ADJUST_RETRY),
             estimated_impact={
                 'success_rate_delta': -0.02,  # May reduce success slightly
                 'latency_delta_ms': -100.0,  # Will reduce latency
@@ -285,7 +232,7 @@ class PaymentDecisionMaker:
                 'duration_minutes': 20
             },
             risk_level=RiskLevel.LOW,
-            authorization_level=AuthorizationLevel.AUTOMATIC,
+            authorization_level=required_authorization(ActionType.ADJUST_RETRY),
             estimated_impact={
                 'success_rate_delta': 0.05,  # Better user experience
                 'latency_delta_ms': -150.0,
@@ -313,7 +260,7 @@ class PaymentDecisionMaker:
                 'duration_minutes': 10
             },
             risk_level=RiskLevel.LOW,
-            authorization_level=AuthorizationLevel.AUTOMATIC,
+            authorization_level=required_authorization(ActionType.ADJUST_RETRY),
             estimated_impact={
                 'success_rate_delta': -0.03,  # May fail some slow transactions
                 'latency_delta_ms': -500.0,  # Significant latency improvement
@@ -348,7 +295,7 @@ class PaymentDecisionMaker:
                 'duration_minutes': 20
             },
             risk_level=RiskLevel.MEDIUM,
-            authorization_level=AuthorizationLevel.SEMI_AUTOMATIC,
+            authorization_level=required_authorization(ActionType.ROUTE_CHANGE),
             estimated_impact={
                 'success_rate_delta': 0.20,  # Significant improvement expected
                 'latency_delta_ms': 100.0,  # May add latency
@@ -370,7 +317,7 @@ class PaymentDecisionMaker:
             target='none',
             parameters={},
             risk_level=RiskLevel.LOW,
-            authorization_level=AuthorizationLevel.AUTOMATIC,
+            authorization_level=required_authorization(ActionType.NO_ACTION),
             estimated_impact={
                 'success_rate_delta': 0.0,
                 'latency_delta_ms': 0.0,
@@ -399,7 +346,7 @@ class PaymentDecisionMaker:
                 'description': pattern.description
             },
             risk_level=RiskLevel.LOW,
-            authorization_level=AuthorizationLevel.AUTOMATIC,
+            authorization_level=required_authorization(ActionType.ALERT_OPS),
             estimated_impact={
                 'success_rate_delta': 0.0,
                 'latency_delta_ms': 0.0,

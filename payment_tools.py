@@ -24,6 +24,7 @@ from src.models.state import (
 )
 from src.agent.executor import PaymentExecutor
 from src.analysis.experiment import ExperimentRegistry
+from src.safety.approvals import ApprovalQueue
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,10 @@ logger = logging.getLogger(__name__)
 executor = PaymentExecutor()
 agent_state = AgentState()
 
-# Actions the model proposed that need a human before they can run.
-pending_approvals: dict = {}
+# Actions the model proposed that need a human before they can run. The same
+# queue the autonomous loop uses, so an operator has one place to look rather
+# than one per surface.
+approvals = ApprovalQueue()
 
 # Holdout experiments measuring whether the model's interventions helped
 experiments = ExperimentRegistry()
@@ -92,18 +95,14 @@ def _dispatch(action: Action) -> str:
         success, message = executor.execute(action, agent_state, observer)
         return f"Success: {success}\nMessage: {message}"
 
-    pending_approvals[action.action_id] = action
+    request = approvals.submit(action, requested_by='llm')
     tier = action.authorization_level.value
-    logger.info(
-        "Action %s (%s) queued for approval [%s]",
-        action.action_id, action.action_type.value, tier
-    )
     return (
         f"Success: False\n"
         f"Message: {action.action_type.value} on '{action.target}' requires "
         f"{tier} authorization and was NOT executed. It is queued as "
-        f"approval id {action.action_id}. A human operator must approve it via "
-        f"approve_pending_action before it takes effect."
+        f"approval id {request.request_id}. A human operator must approve it "
+        f"before it takes effect."
     )
 
 
@@ -254,7 +253,7 @@ def get_agent_state() -> str:
         "average_latency_ms": agent_state.average_latency_ms,
         "control_plane": policy.to_dict(),
         "active_interventions_count": len(active_interventions),
-        "pending_approvals": len(pending_approvals),
+        "pending_approvals": len(approvals.pending()),
     }
     return json.dumps(state_info, default=str, indent=2)
 
@@ -309,21 +308,11 @@ def list_pending_approvals() -> str:
     Returns:
         A JSON string describing each pending action and why it is held.
     """
-    if not pending_approvals:
+    approvals.expire_stale()
+    pending = approvals.pending()
+    if not pending:
         return "No actions are awaiting approval."
-
-    return json.dumps([
-        {
-            "approval_id": action.action_id,
-            "action": action.action_type.value,
-            "target": action.target,
-            "required_authorization": action.authorization_level.value,
-            "risk_level": action.risk_level.value,
-            "parameters": action.parameters,
-            "proposed_at": action.created_at.isoformat(),
-        }
-        for action in pending_approvals.values()
-    ], indent=2)
+    return json.dumps([r.summary() for r in pending], indent=2, default=str)
 
 
 def approve_pending_action(approval_id: str, approver: str) -> str:
@@ -339,19 +328,12 @@ def approve_pending_action(approval_id: str, approver: str) -> str:
     Returns:
         A status string indicating whether the action executed.
     """
-    action = pending_approvals.pop(approval_id, None)
-    if action is None:
-        return f"Success: False\nMessage: No pending action with id {approval_id}"
+    ok, message, action = approvals.approve(approval_id, approver)
+    if not ok:
+        return f"Success: False\nMessage: {message}"
 
-    if not approver or not approver.strip():
-        pending_approvals[approval_id] = action
-        return "Success: False\nMessage: An approver identity is required"
-
-    action.approver = approver
-    success, message = executor.execute(action, agent_state, observer)
-    if not success:
-        pending_approvals[approval_id] = action
-    return f"Success: {success}\nMessage: {message} (approved by {approver})"
+    success, detail = executor.execute(action, agent_state, observer)
+    return f"Success: {success}\nMessage: {detail} ({message})"
 
 
 # ── Convenience list for LLM tool registration ──────────────────────────────

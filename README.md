@@ -117,10 +117,25 @@ The system follows a **"Brain + Hands"** architecture:
 
 The mapping lives in one place — `ACTION_AUTHORIZATION` in `src/models/state.py` —
 and every path that can create an action reads it: the autonomous loop, the LLM
-tool layer and the MCP server alike. A tool call that proposes a MANUAL action
-is queued for approval and returns `Success: False`, not executed. Alongside the
-tiers, `SafetyGuardrails` enforces rate limits, a maximum blast radius, a
-concurrency cap and a minimum confidence before any intervention runs.
+tool layer and the MCP server alike. Alongside the tiers, `SafetyGuardrails`
+enforces rate limits, a maximum blast radius, a concurrency cap and a minimum
+confidence before any intervention runs.
+
+An action the agent may not take alone is **queued, not skipped**. During an
+issuer outage the agent shifts traffic away on its own (low risk, reversible)
+and asks for the circuit breaker:
+
+```
+Executed unattended:
+   route_change      tier=semi_automatic  risk=low     approver=agent:auto_low_risk
+Queued for a human:
+   apr-0001  circuit_breaker on SBI  tier=semi_automatic  risk=medium  lapses in 571s
+```
+
+Requests **lapse** if nobody answers — they are never granted by default, because
+a tier that eventually approves itself is a delay rather than a control. Approving
+is a separate act from proposing: the agent fills this queue and never drains it,
+which is why the model is not given the approval tool.
 
 ### 5. 🔄 Automatic Rollback
 If an action causes harm, the system automatically reverts it:

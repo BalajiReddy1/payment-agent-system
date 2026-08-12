@@ -56,8 +56,11 @@ class PaymentExecutor:
             'cost_increase': 0.20        # 20% increase triggers rollback
         }
         
-        # Action execution log
+        # Action execution log. Bounded: alerts vastly outnumber interventions
+        # on a busy incident, and an unbounded list is a slow leak in a
+        # process meant to run for weeks.
         self.execution_log: List[Dict] = []
+        self.max_log_entries = 2000
 
         # Active interventions
         self.active_interventions: Dict[str, Action] = {}
@@ -202,8 +205,18 @@ class PaymentExecutor:
     @staticmethod
     def _attribution(action: Action) -> Dict[str, str]:
         """Who and why, recorded on every control plane revision."""
+        approver = action.approver or ''
+        if not approver:
+            author = 'agent'
+        elif approver.startswith('agent:'):
+            # The agent auto-approving its own low-risk action is still the
+            # agent; labelling it "operator" would falsify the audit trail.
+            author = approver
+        else:
+            author = f"operator:{approver}"
+
         return {
-            'author': f"operator:{action.approver}" if action.approver else 'agent',
+            'author': author,
             'reason': f"{action.action_type.value} on {action.target}",
             'action_id': action.action_id,
         }
@@ -350,6 +363,8 @@ class PaymentExecutor:
         }
         
         self.execution_log.append(log_entry)
+        if len(self.execution_log) > self.max_log_entries:
+            self.execution_log = self.execution_log[-self.max_log_entries:]
     
     def monitor_and_rollback(
         self,
@@ -475,6 +490,18 @@ class PaymentExecutor:
         """Get list of currently active interventions"""
         return list(self.active_interventions.values())
     
-    def get_execution_history(self, limit: int = 50) -> List[Dict]:
-        """Get recent execution history"""
-        return self.execution_log[-limit:]
+    def get_execution_history(
+        self, limit: int = 50, exclude_types=None
+    ) -> List[Dict]:
+        """
+        Recent execution history, newest last.
+
+        `exclude_types` filters *before* the limit is applied. Filtering after
+        it means a flood of alerts pushes every real intervention out of the
+        window and the caller sees an empty list.
+        """
+        entries = self.execution_log
+        if exclude_types:
+            excluded = {t.value if hasattr(t, 'value') else t for t in exclude_types}
+            entries = [e for e in entries if e['action_type'] not in excluded]
+        return entries[-limit:]

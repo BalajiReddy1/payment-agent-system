@@ -24,7 +24,7 @@ def journal():
     return SQLiteJournal(str(path), label="test")
 
 
-def run_incident(journal, cycles=5, severity=0.85):
+def run_incident(journal, cycles=5, severity=0.85, count=150):
     agent, simulator, _ = build_system(
         journal=journal,
         window_size_minutes=5,
@@ -34,8 +34,10 @@ def run_incident(journal, cycles=5, severity=0.85):
         'HDFC_BANK', severity=severity, duration_seconds=3600
     )
     for _ in range(cycles):
-        agent.process_batch(simulator.generate_stream(count=150, start_time=datetime.now()))
+        agent.process_batch(simulator.generate_stream(count=count, start_time=datetime.now()))
         agent.run_cycle()
+        for request in agent.approvals.pending():
+            agent.approve(request.request_id, 'ops@example.com')
     return agent
 
 
@@ -119,7 +121,8 @@ def test_completed_interventions_are_not_reported_as_open(journal):
 
 
 def test_outcomes_are_persisted_with_their_action(journal):
-    run_incident(journal)
+    # Enough traffic for both experiment arms to clear the minimum sample size
+    run_incident(journal, cycles=8, count=500)
 
     outcomes = journal.query("SELECT * FROM outcomes")
     assert outcomes
@@ -130,7 +133,7 @@ def test_outcomes_are_persisted_with_their_action(journal):
 
 
 def test_effectiveness_query_groups_by_action_type(journal):
-    run_incident(journal)
+    run_incident(journal, cycles=8, count=500)
 
     rows = journal.effectiveness_by_action_type()
     assert rows

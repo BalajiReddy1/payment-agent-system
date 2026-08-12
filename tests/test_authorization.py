@@ -16,6 +16,7 @@ from src.models.state import (
     RiskLevel,
     required_authorization,
 )
+from src.safety.approvals import ApprovalQueue
 from src.safety.guardrails import SafetyGuardrails, SafetyLimits
 
 from conftest import make_action
@@ -89,14 +90,14 @@ def test_llm_tools_cannot_bypass_the_tier():
 
     payment_tools.executor = PaymentExecutor()
     payment_tools.agent_state = AgentState()
-    payment_tools.pending_approvals.clear()
+    payment_tools.approvals = ApprovalQueue()
 
     result = payment_tools.suppress_payment_method('upi')
 
     assert 'Success: False' in result
     assert 'manual' in result
     assert payment_tools.agent_state.suppressed_methods == set()
-    assert len(payment_tools.pending_approvals) == 1
+    assert len(payment_tools.approvals.pending()) == 1
 
 
 def test_llm_tool_automatic_tier_still_executes():
@@ -104,7 +105,7 @@ def test_llm_tool_automatic_tier_still_executes():
 
     payment_tools.executor = PaymentExecutor()
     payment_tools.agent_state = AgentState()
-    payment_tools.pending_approvals.clear()
+    payment_tools.approvals = ApprovalQueue()
 
     result = payment_tools.adjust_retry_strategy('global_retry_strategy', max_retries=2)
 
@@ -117,16 +118,16 @@ def test_human_approval_releases_a_queued_action():
 
     payment_tools.executor = PaymentExecutor()
     payment_tools.agent_state = AgentState()
-    payment_tools.pending_approvals.clear()
+    payment_tools.approvals = ApprovalQueue()
 
     payment_tools.suppress_payment_method('upi')
-    approval_id = next(iter(payment_tools.pending_approvals))
+    approval_id = payment_tools.approvals.pending()[0].request_id
 
     result = payment_tools.approve_pending_action(approval_id, 'ops@example.com')
 
     assert 'Success: True' in result
     assert 'upi' in payment_tools.agent_state.suppressed_methods
-    assert not payment_tools.pending_approvals
+    assert not payment_tools.approvals.pending()
 
 
 def test_approval_requires_an_approver_identity():
@@ -134,16 +135,16 @@ def test_approval_requires_an_approver_identity():
 
     payment_tools.executor = PaymentExecutor()
     payment_tools.agent_state = AgentState()
-    payment_tools.pending_approvals.clear()
+    payment_tools.approvals = ApprovalQueue()
 
     payment_tools.suppress_payment_method('upi')
-    approval_id = next(iter(payment_tools.pending_approvals))
+    approval_id = payment_tools.approvals.pending()[0].request_id
 
     result = payment_tools.approve_pending_action(approval_id, '   ')
 
     assert 'Success: False' in result
     # The action stays queued rather than being silently dropped
-    assert approval_id in payment_tools.pending_approvals
+    assert approval_id in {r.request_id for r in payment_tools.approvals.pending()}
 
 
 def test_model_is_not_given_the_approval_tool():

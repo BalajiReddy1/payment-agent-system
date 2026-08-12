@@ -12,7 +12,7 @@ from src.agent.core import PaymentAgent
 from src.simulation.payment_simulator import PaymentSimulator
 
 
-def run_agent(cycles=5, outcome_evaluation_seconds=0, severity=0.85):
+def run_agent(cycles=5, outcome_evaluation_seconds=0, severity=0.85, count=250):
     agent = PaymentAgent(
         window_size_minutes=5,
         outcome_evaluation_seconds=outcome_evaluation_seconds,
@@ -22,8 +22,12 @@ def run_agent(cycles=5, outcome_evaluation_seconds=0, severity=0.85):
 
     results = []
     for _ in range(cycles):
-        agent.process_batch(simulator.generate_stream(count=250, start_time=datetime.now()))
+        agent.process_batch(simulator.generate_stream(count=count, start_time=datetime.now()))
         results.append(agent.run_cycle())
+        # An operator grants whatever the agent asked for, so the tests cover
+        # the full path rather than only what the agent may do unattended.
+        for request in agent.approvals.pending():
+            agent.approve(request.request_id, 'ops@example.com')
     return agent, results
 
 
@@ -52,7 +56,8 @@ def test_alerts_are_raised_for_severe_patterns():
 
 
 def test_learn_phase_records_outcomes():
-    agent, _results = run_agent(outcome_evaluation_seconds=0)
+    # Enough traffic for both experiment arms to clear the minimum sample size
+    agent, _results = run_agent(cycles=8, count=500, outcome_evaluation_seconds=0)
 
     summary = agent.get_status()['learning_summary']
     assert summary['total_outcomes_recorded'] > 0
@@ -80,12 +85,17 @@ def test_status_payload_has_the_fields_the_api_reads():
 
 def test_refused_action_falls_through_to_next_candidate():
     """
-    With a circuit breaker already active on the target, the agent should reach
-    past it to the next viable candidate rather than doing nothing.
+    When the top candidate is refused - already active, or queued for an
+    operator - the agent should reach past it to the next viable option rather
+    than doing nothing.
     """
     agent, results = run_agent(cycles=6)
 
-    executed = [a['type'] for r in results for a in r['actions_taken']]
+    # The action history covers both routes: executed unattended, and executed
+    # after an operator granted the queued request.
+    executed = [a.action_type.value for a in agent.memory.action_history]
     assert len(executed) >= 2
-    # More than one distinct intervention type was used across the incident
     assert len(set(executed)) >= 2
+
+    # The agent asked for what it could not do alone rather than staying silent
+    assert agent.approvals.requests, "the agent should have requested approval"

@@ -114,18 +114,30 @@ def test_agent_recovers_success_rate_end_to_end():
     """
     The whole point, in one test: inject an outage, let the agent run, and the
     measured success rate should climb because of what the agent did.
+
+    The stronger intervention needs an operator, so this also walks the
+    human-in-the-loop path: the agent mitigates with what it may do alone and
+    queues the rest.
     """
     agent = PaymentAgent(window_size_minutes=5)
     simulator = PaymentSimulator(base_success_rate=0.96, control_plane=agent.state)
     simulator.inject_issuer_degradation('HDFC_BANK', severity=0.85, duration_seconds=3600)
 
     rates = []
+    approved = False
     for _ in range(6):
         batch = simulator.generate_stream(count=250, start_time=datetime.now())
         rates.append(success_rate(batch))
         agent.process_batch(batch)
         agent.run_cycle()
 
+        # An operator grants the queued breaker the first time it is asked for
+        if not approved:
+            for request in agent.approvals.pending():
+                agent.approve(request.request_id, 'ops@example.com')
+                approved = True
+
+    assert approved, "the agent should have asked for the stronger intervention"
     assert agent.state.actions_executed > 0
     assert max(rates[3:]) > rates[0] + 0.05
 

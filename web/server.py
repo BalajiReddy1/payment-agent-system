@@ -136,6 +136,7 @@ class AgentRunner:
             'counters': status['performance'],
             'issuers': self._issuers(),
             'incidents': status.get('incidents', []),
+            'approvals': status.get('approvals', []),
             'experiments': status.get('experiments', []),
             'interventions': status.get('active_interventions', []),
             'control_plane': {
@@ -193,11 +194,11 @@ class AgentRunner:
         return entries
 
     def _decisions(self, limit=12):
-        log = self.agent.executor.get_execution_history(limit=60)
+        log = self.agent.executor.get_execution_history(
+            limit=limit, exclude_types=('alert_ops', 'no_action')
+        )
         decisions = []
         for entry in reversed(log):
-            if entry['action_type'] == 'alert_ops':
-                continue
             decisions.append({
                 'action_id': entry['action_id'],
                 'type': entry['action_type'],
@@ -209,11 +210,18 @@ class AgentRunner:
                 'reasoning': entry.get('reasoning', ''),
                 'baseline': entry.get('baseline_metrics', {}),
             })
-            if len(decisions) >= limit:
-                break
         return decisions
 
     # ── Commands ─────────────────────────────────────────────────────────────
+
+    def decide_approval(self, request_id, verdict, approver):
+        """Grant or refuse a queued action on an operator's behalf."""
+        if verdict == 'approve':
+            ok, message = self.agent.approve(request_id, approver)
+        else:
+            ok, message = self.agent.deny(request_id, approver)
+        self._emit('approval', {'request_id': request_id, 'verdict': verdict, 'ok': ok})
+        return {'ok': ok, 'message': message}
 
     def inject(self, kind, params):
         sim = self.simulator
@@ -272,16 +280,24 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         route = urlparse(self.path)
-        if route.path != '/api/scenario':
-            return self.send_error(404)
-
         length = int(self.headers.get('Content-Length', 0))
         body = json.loads(self.rfile.read(length) or b'{}')
-        try:
-            result = self.runner.inject(body.pop('type', ''), body)
-        except ValueError as exc:
-            return self._send_json({'error': str(exc)}, status=400)
-        self._send_json(result)
+
+        if route.path == '/api/approval':
+            return self._send_json(self.runner.decide_approval(
+                body.get('request_id', ''),
+                body.get('verdict', 'approve'),
+                body.get('approver', 'console-operator'),
+            ))
+
+        if route.path == '/api/scenario':
+            try:
+                result = self.runner.inject(body.pop('type', ''), body)
+            except ValueError as exc:
+                return self._send_json({'error': str(exc)}, status=400)
+            return self._send_json(result)
+
+        self.send_error(404)
 
     # ── Transport helpers ────────────────────────────────────────────────────
 

@@ -175,6 +175,42 @@ function renderIncidents(s) {
 
 /* The decision trace is the screen that proves this is reasoning rather than
  * a rules engine, so it shows the alternatives that lost, not only the winner. */
+/* Approvals are the one panel that asks something of the reader, so it sits
+ * above the trace and hides itself entirely when the queue is empty rather
+ * than showing a permanent "nothing to do" box. */
+function renderApprovals(s) {
+  const panel = $('approvals-panel');
+  const host = $('approvals');
+  const pending = (s.approvals || []).filter((a) => a.status === 'pending');
+
+  panel.hidden = pending.length === 0;
+  if (!pending.length) return;
+
+  host.innerHTML = pending.map((a) => {
+    const left = a.seconds_remaining;
+    return `
+      <div class="row approval" data-level="warn">
+        <div>
+          <div class="row-name">
+            ${escape(title(a.action_type))} · ${escape(a.target.replace(/_/g, ' '))}
+            <span class="chip watch">${escape(a.authorization.replace(/_/g, '-'))}</span>
+          </div>
+          <div class="approval-meta">
+            <span class="incident-id">${escape(a.request_id)}</span>
+            <span>risk ${escape(a.risk_level)}</span>
+            <span>blast radius ${pct(a.blast_radius, 1)}</span>
+            <span>expected ${a.expected_lift >= 0 ? '+' : ''}${(a.expected_lift * 100).toFixed(1)} pts</span>
+            ${left !== null && left !== undefined ? `<span>lapses in ${Math.round(left)}s</span>` : ''}
+          </div>
+        </div>
+        <div class="controls">
+          <button class="primary" data-approve="${escape(a.request_id)}">Approve</button>
+          <button data-deny="${escape(a.request_id)}">Deny</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
 function renderDecisions(s) {
   const host = $('decisions');
   if (!s.decisions.length) {
@@ -316,6 +352,7 @@ function render(snapshot) {
   renderIssuers(snapshot);
   renderIssuerOptions(snapshot);
   renderIncidents(snapshot);
+  renderApprovals(snapshot);
   renderDecisions(snapshot);
   renderExperiments(snapshot);
   renderRevisions(snapshot);
@@ -343,6 +380,23 @@ function connect() {
 }
 
 document.addEventListener('click', async (event) => {
+  const decision = event.target.closest('[data-approve], [data-deny]');
+  if (decision) {
+    const approve = decision.hasAttribute('data-approve');
+    decision.disabled = true;
+    await fetch('/api/approval', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        request_id: decision.dataset.approve || decision.dataset.deny,
+        verdict: approve ? 'approve' : 'deny',
+        approver: 'console-operator',
+      }),
+    }).catch(() => {});
+    fetch('/api/snapshot').then((r) => r.json()).then(render).catch(() => {});
+    return;
+  }
+
   const button = event.target.closest('[data-scenario]');
   if (!button) return;
 

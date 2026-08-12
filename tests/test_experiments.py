@@ -180,6 +180,9 @@ def run_incident(cycles=10, holdout=0.10, severity=0.85):
     for _ in range(cycles):
         agent.process_batch(simulator.generate_stream(count=400, start_time=datetime.now()))
         agent.run_cycle()
+        # Stand in for the operator so the measured path is exercised
+        for request in agent.approvals.pending():
+            agent.approve(request.request_id, 'ops@example.com')
     return agent, simulator
 
 

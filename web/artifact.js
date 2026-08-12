@@ -117,6 +117,40 @@ function renderIncidents() {
   }).join('');
 }
 
+/* Approvals ask something of the reader, so they sit above the trace and the
+ * panel hides entirely when the queue is empty rather than showing a
+ * permanent "nothing to do" box. Buttons are inert in the shared snapshot -
+ * a captured session has no agent to act on. */
+function renderApprovals() {
+  const panel = $('approvals-panel');
+  const host = $('approvals');
+  const pending = (SNAPSHOT.approvals || []).filter((a) => a.status === 'pending');
+
+  if (!panel || !host) return;
+  panel.hidden = pending.length === 0;
+  if (!pending.length) return;
+
+  host.innerHTML = pending.map((a) => `
+    <div class="row approval" data-level="warn">
+      <div>
+        <div class="row-name">
+          ${esc(title(a.action_type))} · ${esc(a.target.replace(/_/g, ' '))}
+          <span class="chip watch">${esc(a.authorization.replace(/_/g, '-'))}</span>
+        </div>
+        <div class="approval-meta">
+          <span class="incident-id">${esc(a.request_id)}</span>
+          <span>risk ${esc(a.risk_level)}</span>
+          <span>blast radius ${pct(a.blast_radius, 1)}</span>
+          ${a.seconds_remaining != null ? `<span>lapses in ${Math.round(a.seconds_remaining)}s</span>` : ''}
+        </div>
+      </div>
+      <div class="controls">
+        <button class="primary" disabled title="Captured session">Approve</button>
+        <button disabled title="Captured session">Deny</button>
+      </div>
+    </div>`).join('');
+}
+
 /* The trace shows the alternatives that lost, which is what distinguishes a
  * reasoning agent from a rules engine. */
 function renderDecisions() {
@@ -324,6 +358,7 @@ function stop() {
 function init() {
   renderIssuers();
   renderIncidents();
+  renderApprovals();
   renderDecisions();
   renderExperiments();
   renderRevisions();
