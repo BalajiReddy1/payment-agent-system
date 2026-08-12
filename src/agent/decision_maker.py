@@ -411,14 +411,46 @@ class PaymentDecisionMaker:
             created_at=datetime.now()
         )
     
+    # Measured history is trusted fully at this many samples; below it, the
+    # hardcoded estimate still carries some weight.
+    SAMPLES_FOR_FULL_TRUST = 5
+
+    def _effective_impact(self, action: Action, context: DecisionContext) -> Dict:
+        """
+        The impact estimate to score against, preferring measurement to guesswork.
+
+        Every action type ships with a hardcoded `estimated_impact` - somebody's
+        guess about what a circuit breaker is worth. Once holdout experiments
+        have measured that action on similar incidents, the measurement should
+        win: it is the difference between an agent that believes its own
+        priors and one that learns.
+        """
+        impact = dict(action.estimated_impact)
+        recommendation = (context.recommendations or {}).get(action.action_type.value)
+        if not recommendation:
+            return impact
+
+        samples = recommendation.get('samples', 0)
+        if samples < 2:
+            return impact
+
+        trust = min(samples / self.SAMPLES_FOR_FULL_TRUST, 1.0)
+        estimated = impact.get('success_rate_delta', 0.0)
+        measured = recommendation.get('expected_lift', estimated)
+
+        impact['success_rate_delta'] = (1.0 - trust) * estimated + trust * measured
+        impact['measured_samples'] = samples
+        impact['measured_lift'] = measured
+        return impact
+
     def _evaluate_action(self, action: Action, context: DecisionContext) -> Tuple[float, str]:
         """
         Evaluate an action using multi-objective optimization.
-        
+
         Returns:
             Tuple of (score, explanation)
         """
-        impact = action.estimated_impact
+        impact = self._effective_impact(action, context)
         
         # Calculate individual objective scores (0-1, higher is better)
         success_score = self._score_success_impact(
@@ -577,6 +609,25 @@ class PaymentDecisionMaker:
         reasoning_parts.append(f"- Cost: ${impact.get('cost_delta_per_txn', 0):.3f} per transaction")
         reasoning_parts.append(f"- Affected Traffic: {impact.get('affected_traffic_pct', 0):.1%}\n")
         
+        # What history says
+        if context.recalled_incidents:
+            reasoning_parts.append(f"## Similar Past Incidents\n")
+            for line in context.recalled_incidents:
+                reasoning_parts.append(f"- {line}")
+            reasoning_parts.append("")
+
+        recommendation = (context.recommendations or {}).get(
+            selected_action.action_type.value
+        )
+        if recommendation:
+            reasoning_parts.append(f"## Measured History\n")
+            reasoning_parts.append(
+                f"- {selected_action.action_type.value} measured "
+                f"{recommendation['expected_lift']:+.1%} across "
+                f"{recommendation['samples']} comparable incidents"
+            )
+            reasoning_parts.append("")
+
         # Alternatives considered
         reasoning_parts.append(f"## Alternatives Considered\n")
         for action, score, explanation in all_evaluated[:3]:

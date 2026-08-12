@@ -356,6 +356,10 @@ class DecisionContext:
     current_state: AgentState
     historical_outcomes: Dict[str, Dict[str, float]]
     constraints: Dict[str, Any]
+    # What measurably worked on similar incidents before, keyed by action type
+    recommendations: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    # Human-readable recall, carried into the decision's reasoning
+    recalled_incidents: List[str] = field(default_factory=list)
     
     def __post_init__(self):
         if self.constraints is None:
