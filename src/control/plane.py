@@ -374,10 +374,29 @@ def _diff_map(
 ) -> List[str]:
     lines = []
     for key in sorted(set(after) - set(before)):
-        lines.append(f"+ {label}: {key} = {dict(after[key])}")
+        lines.append(f"+ {label}: {key} = {_readable(after[key])}")
     for key in sorted(set(before) - set(after)):
         lines.append(f"- {label}: {key}")
     for key in sorted(set(before) & set(after)):
         if before[key] != after[key]:
-            lines.append(f"~ {label}: {key} = {dict(before[key])} -> {dict(after[key])}")
+            lines.append(
+                f"~ {label}: {key} = {_readable(before[key])} -> {_readable(after[key])}"
+            )
     return lines
+
+
+def _readable(value: Mapping[str, Any]) -> str:
+    """
+    Render a policy value for human eyes.
+
+    Bookkeeping fields - when it was applied, which are recorded on the
+    revision itself anyway - are dropped. A diff exists to answer "what
+    changed", and repeating a timestamp inside it buries the answer.
+    """
+    interesting = {
+        key: val for key, val in value.items()
+        if not key.endswith('_at') and val not in (None, False, 0)
+    }
+    if not interesting:
+        return '{}'
+    return ', '.join(f"{key}={val}" for key, val in sorted(interesting.items()))

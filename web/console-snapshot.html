@@ -1,0 +1,965 @@
+<title>Payment Operations Console</title>
+<style>
+/*
+ * Payment Operations Console — design system
+ *
+ * Direction: security printing meets an instrument panel. Payments are a
+ * settlement business, so the visual references are engraved securities and
+ * calibrated instruments rather than a game HUD or a marketing dashboard.
+ *
+ * Deliberate calls:
+ *   - Cool porcelain ground with white panels floating on it. Panels are
+ *     separated by the ground showing through, not by hairline rules, which
+ *     reads as instrumentation rather than newsprint.
+ *   - One accent, intaglio blue, taken from banknote engraving. Semantic
+ *     status colours are a separate set so "attention" never competes with
+ *     "brand".
+ *   - Status is encoded as a severity stripe on the row edge as well as in
+ *     the number, so what needs looking at reads before anything is parsed.
+ *   - Monospace, tabular figures for every reading. An instrument's numbers
+ *     should align and should not reflow when they change.
+ *   - No gradients, no glow, no glassmorphism, no serif display. Depth comes
+ *     from a single hairline and one soft shadow.
+ *
+ * Theme: this commits to light on purpose. A data-dense operations surface
+ * that half-supports dark is worse than one that does not, so every colour is
+ * painted explicitly and no token is redefined by scheme.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Ground and panels */
+  --ground:      #EDEFF1;
+  --panel:       #FFFFFF;
+  --panel-sunk:  #F4F6F7;
+  --panel-hover: #F8F9FA;
+
+  /* Ink — cool near-black, biased toward the accent */
+  --ink:   #14181D;
+  --ink-2: #5C6670;
+  --ink-3: #8C959D;
+  --ink-4: #B6BDC3;
+
+  --rule:        #DDE1E5;
+  --rule-strong: #C7CDD3;
+
+  /* Single accent: intaglio blue */
+  --accent:      #1B3A6B;
+  --accent-soft: #E8EDF5;
+  --accent-line: #B9C6DA;
+
+  /* Semantic status, deliberately not the accent */
+  --settled:      #0B6E4F;
+  --settled-soft: #E4F0EB;
+  --watch:        #8A5A00;
+  --watch-soft:   #F6EFE1;
+  --failing:      #A32A26;
+  --failing-soft: #F7E9E8;
+
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "Liberation Mono", monospace;
+
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 24px; --s6: 32px; --s7: 44px; --s8: 64px;
+
+  --radius: 4px;
+  --lift: 0 1px 2px rgba(20, 24, 29, 0.04), 0 1px 1px rgba(20, 24, 29, 0.03);
+  --t: 160ms cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  overflow-x: hidden;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 { margin: 0; font-weight: 590; }
+
+/* Every figure is an instrument reading */
+.num, .reading, td.num, time {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  letter-spacing: -0.01em;
+}
+
+.micro {
+  font-size: 10px;
+  font-weight: 620;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+::selection { background: var(--accent-soft); }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Frame: persistent rail + modular panel grid ──────────────────────────── */
+
+.frame {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: var(--s5);
+  max-width: 1520px;
+  margin: 0 auto;
+  padding: var(--s5) var(--s5) var(--s8);
+  align-items: start;
+}
+
+@media (max-width: 1080px) {
+  .frame { grid-template-columns: minmax(0, 1fr); }
+  .rail { position: static !important; }
+}
+
+@media (max-width: 620px) {
+  .frame { padding: var(--s4) var(--s3) var(--s7); gap: var(--s4); }
+  .grid { gap: var(--s4); }
+  .reading-value { font-size: 23px; }
+  .row-issuer { grid-template-columns: minmax(0, 1fr) 56px 46px; }
+  .row-issuer .gauge { display: none; }
+}
+
+.rail {
+  position: sticky;
+  top: var(--s5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.rail-brand { padding-bottom: var(--s4); border-bottom: 1px solid var(--rule-strong); }
+
+.rail-brand .name {
+  font-size: 15px;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.rail-brand .sub {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+/* Agent state machine — the console should always say what the agent is doing */
+.state {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--lift);
+  padding: var(--s4);
+}
+
+.state-phase {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 14px;
+  font-weight: 590;
+  letter-spacing: -0.01em;
+  text-transform: capitalize;
+}
+
+.state-phase::before {
+  content: "";
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  flex: none;
+}
+
+.state[data-phase="observing"]  .state-phase::before { background: var(--settled); }
+.state[data-phase="monitoring"] .state-phase::before { background: var(--watch); }
+.state[data-phase="mitigating"] .state-phase::before {
+  background: var(--failing);
+  animation: breathe 2.2s ease-in-out infinite;
+}
+
+@keyframes breathe { 0%, 100% { opacity: 1 } 50% { opacity: 0.3 } }
+
+.state-note { margin-top: var(--s2); font-size: 11.5px; color: var(--ink-3); line-height: 1.45; }
+
+.rail-stats { display: grid; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
+
+.rail-stat {
+  min-width: 0;
+  background: var(--panel);
+  padding: var(--s3) var(--s4);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+
+.rail-stat .k { font-size: 11.5px; color: var(--ink-2); }
+.rail-stat .v { font-size: 13px; font-weight: 560; }
+
+/* ── Panels ───────────────────────────────────────────────────────────────── */
+
+.grid { display: grid; gap: var(--s5); }
+.grid.two { grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr); }
+.grid.metrics-row { grid-template-columns: repeat(4, 1fr); gap: var(--s4); }
+
+@media (max-width: 1240px) { .grid.two { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 820px)  { .grid.metrics-row { grid-template-columns: repeat(2, 1fr); } }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--lift);
+  min-width: 0;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.panel-head .hint { font-size: 11.5px; color: var(--ink-3); }
+.panel-body { padding: var(--s4); }
+.panel-body.flush { padding: 0 var(--s4); }
+
+/* ── Readings ─────────────────────────────────────────────────────────────── */
+
+.reading-block { padding: var(--s4); }
+
+.reading-value {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 27px;
+  font-weight: 500;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  margin-top: var(--s3);
+}
+
+.reading-delta { margin-top: var(--s2); font-size: 11.5px; color: var(--ink-3); }
+.reading-delta.up { color: var(--settled); }
+.reading-delta.down { color: var(--failing); }
+
+.spark { display: block; width: 100%; height: 30px; margin-top: var(--s3); }
+
+/* ── Rows with a severity stripe ──────────────────────────────────────────── */
+
+.row {
+  position: relative;
+  display: grid;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) 0 var(--s3) var(--s3);
+  border-bottom: 1px solid var(--rule);
+}
+
+.row:last-child { border-bottom: 0; }
+
+.row::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 6px; bottom: 6px;
+  width: 3px;
+  border-radius: 2px;
+  background: transparent;
+}
+
+.row[data-level="ok"]::before   { background: var(--settled); }
+.row[data-level="warn"]::before { background: var(--watch); }
+.row[data-level="bad"]::before  { background: var(--failing); }
+
+.row-issuer { grid-template-columns: minmax(0, 1fr) 84px 58px 48px; }
+
+.row-name {
+  font-size: 12.5px; font-weight: 520;
+  display: flex; align-items: center; gap: var(--s2);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.row-name span.muted { color: var(--ink-3); font-weight: 400; }
+
+.gauge { position: relative; height: 5px; background: var(--panel-sunk); border-radius: 3px; overflow: hidden; }
+.gauge > i {
+  position: absolute; inset: 0 auto 0 0;
+  background: var(--settled);
+  border-radius: 3px;
+  transition: width var(--t), background var(--t);
+}
+.gauge > i[data-level="warn"] { background: var(--watch); }
+.gauge > i[data-level="bad"]  { background: var(--failing); }
+
+.row .val { font-size: 12px; text-align: right; }
+.row .val.dim { color: var(--ink-3); }
+
+/* ── Chips ────────────────────────────────────────────────────────────────── */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font-size: 10.5px;
+  font-weight: 560;
+  letter-spacing: 0.03em;
+  border: 1px solid var(--rule-strong);
+  color: var(--ink-2);
+  background: var(--panel);
+  white-space: nowrap;
+}
+
+.chip.settled { color: var(--settled); border-color: #B9D6C9; background: var(--settled-soft); }
+.chip.watch   { color: var(--watch);   border-color: #E0CFA6; background: var(--watch-soft); }
+.chip.failing { color: var(--failing); border-color: #E4C2C0; background: var(--failing-soft); }
+.chip.accent  { color: var(--accent);  border-color: var(--accent-line); background: var(--accent-soft); }
+
+/* ── Incidents ────────────────────────────────────────────────────────────── */
+
+.incident { position: relative; padding: var(--s4) 0 var(--s4) var(--s3); border-bottom: 1px solid var(--rule); }
+.incident:last-child { border-bottom: 0; }
+
+.incident::before {
+  content: "";
+  position: absolute;
+  left: 0; top: var(--s4); bottom: var(--s4);
+  width: 3px; border-radius: 2px;
+  background: var(--rule-strong);
+}
+.incident[data-level="bad"]::before  { background: var(--failing); }
+.incident[data-level="warn"]::before { background: var(--watch); }
+.incident[data-level="ok"]::before   { background: var(--settled); }
+
+.incident-head { display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap; }
+.incident-id { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+.incident-title { font-size: 13.5px; font-weight: 570; letter-spacing: -0.01em; }
+
+.incident-meta {
+  margin-top: var(--s2);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  display: flex; gap: var(--s4); flex-wrap: wrap; align-items: center;
+}
+
+.incident-advice {
+  margin-top: var(--s3);
+  padding: var(--s3);
+  background: var(--accent-soft);
+  border-left: 2px solid var(--accent);
+  font-size: 12.5px;
+}
+
+.incident-advice b {
+  display: block;
+  font-size: 9.5px; font-weight: 640;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 2px;
+}
+
+/* ── Decision trace ───────────────────────────────────────────────────────── */
+
+.trace { border-bottom: 1px solid var(--rule); }
+.trace:last-child { border-bottom: 0; }
+
+.trace-summary {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s2);
+  margin: 0 calc(-1 * var(--s2));
+  cursor: pointer; list-style: none;
+  transition: background var(--t);
+}
+.trace-summary::-webkit-details-marker { display: none; }
+.trace-summary:hover { background: var(--panel-hover); }
+
+.caret { width: 9px; height: 9px; flex: none; color: var(--ink-3); transition: transform var(--t); }
+details[open] > .trace-summary .caret { transform: rotate(90deg); }
+
+.trace-action { font-size: 12.5px; font-weight: 570; }
+.trace-target { font-size: 12.5px; color: var(--ink-2); }
+.trace-time { margin-left: auto; font-size: 11px; color: var(--ink-3); }
+
+.trace-detail { padding: 0 0 var(--s4) 20px; font-size: 12.5px; color: var(--ink-2); }
+.trace-detail h4 { margin: var(--s4) 0 var(--s2); }
+.trace-detail ul { margin: 0; padding-left: var(--s4); }
+.trace-detail li { margin-bottom: 2px; }
+.trace-detail p { margin: 0; overflow-wrap: anywhere; }
+.trace-detail code {
+  font-family: var(--mono); font-size: 11.5px;
+  background: var(--panel-sunk); padding: 2px 6px; border-radius: 3px; color: var(--ink);
+  display: block; max-width: 100%; overflow-x: auto; white-space: pre;
+}
+
+/* ── Experiments ──────────────────────────────────────────────────────────── */
+
+.experiment { padding: var(--s4) 0; border-bottom: 1px solid var(--rule); }
+.experiment:last-child { border-bottom: 0; }
+.experiment-head { display: flex; align-items: baseline; gap: var(--s2); margin-bottom: var(--s3); flex-wrap: wrap; }
+
+.arm { display: grid; grid-template-columns: 58px minmax(0, 1fr) 88px; align-items: center; gap: var(--s3); margin-bottom: var(--s2); }
+.arm-value { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 11.5px; text-align: right; }
+
+/* The interval is the bar. A point estimate alone hides the thing that
+   decides whether the result means anything. */
+.ci { position: relative; height: 30px; margin-top: var(--s3); border-top: 1px solid var(--rule); }
+.ci-zero { position: absolute; top: 4px; bottom: 4px; width: 1px; background: var(--ink-4); }
+.ci-range {
+  position: absolute; top: 11px; height: 9px;
+  background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 2px;
+}
+.ci-point { position: absolute; top: 8px; width: 2px; height: 15px; background: var(--accent); }
+.ci-caption { margin-top: var(--s2); font-size: 11.5px; color: var(--ink-2); }
+
+/* ── Policy revisions ─────────────────────────────────────────────────────── */
+
+.revision { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: var(--s3); padding: var(--s3) 0; border-bottom: 1px solid var(--rule); }
+.revision:last-child { border-bottom: 0; }
+.revision-no { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+.revision-reason { font-size: 12.5px; }
+.revision-author { font-size: 11px; color: var(--ink-3); margin-top: 1px; }
+.revision-change {
+  font-family: var(--mono); font-size: 11px; margin-top: 4px;
+  color: var(--ink-2); overflow-x: auto; white-space: nowrap; padding-bottom: 2px;
+}
+.revision-change.add { color: var(--settled); }
+.revision-change.remove { color: var(--failing); }
+
+/* ── Controls ─────────────────────────────────────────────────────────────── */
+
+.controls { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center; }
+
+button, select {
+  font: inherit; font-size: 12px;
+  padding: 5px 11px;
+  border: 1px solid var(--rule-strong);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--t), border-color var(--t);
+}
+
+button:hover, select:hover { background: var(--panel-hover); border-color: var(--ink-3); }
+button:active { background: var(--panel-sunk); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover { background: #16305A; border-color: #16305A; }
+
+/* ── Utility ──────────────────────────────────────────────────────────────── */
+
+.empty { padding: var(--s6) var(--s4); text-align: center; color: var(--ink-3); font-size: 12.5px; }
+.scroll { max-height: 400px; overflow-y: auto; }
+.scroll::-webkit-scrollbar { width: 7px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 4px; }
+.scroll::-webkit-scrollbar-track { background: transparent; }
+
+.note {
+  margin-top: var(--s5);
+  padding: var(--s4);
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--ink-2);
+  line-height: 1.6;
+}
+
+
+/* ── Shared-snapshot additions ─────────────────────────────────────────────
+   The published version replays a captured session rather than streaming a
+   live one, so it needs a transport control and an honest label. Everything
+   else is the console's own stylesheet, unmodified. */
+
+.replay { display: flex; align-items: center; gap: var(--s3); }
+.replay input[type="range"] {
+  flex: 1; min-width: 0; accent-color: var(--accent); cursor: pointer;
+}
+.capture-note {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.capture-note::before {
+  content: ""; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--ink-4);
+}
+</style>
+
+<div class="frame">
+  <aside class="rail">
+    <div class="rail-brand">
+      <div class="name">Payment Operations</div>
+      <div class="sub">Autonomous mitigation console</div>
+    </div>
+
+    <div class="state" id="state" data-phase="observing">
+      <div class="state-phase" id="phase">observing</div>
+      <div class="state-note" id="phase-note"></div>
+    </div>
+
+    <div class="rail-stats">
+      <div class="rail-stat"><span class="k">Cycle</span><span class="v num" id="cycle">—</span></div>
+      <div class="rail-stat"><span class="k">Policy</span><span class="v num" id="revision">r0</span></div>
+      <div class="rail-stat"><span class="k">Interventions</span><span class="v num" id="stat-actions">—</span></div>
+      <div class="rail-stat"><span class="k">Alerts</span><span class="v num" id="stat-alerts">—</span></div>
+      <div class="rail-stat"><span class="k">Rerouted</span><span class="v num" id="stat-rerouted">—</span></div>
+      <div class="rail-stat"><span class="k">Held out</span><span class="v num" id="stat-holdout">—</span></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span class="capture-note">Captured session</span></div>
+      <div class="panel-body">
+        <div class="replay">
+          <button id="play" class="primary">Pause</button>
+          <input type="range" id="scrub" min="0" max="0" value="0" aria-label="Replay position">
+        </div>
+        <div class="state-note" id="replay-note"></div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="grid">
+    <section class="grid metrics-row">
+      <div class="panel reading-block">
+        <div class="micro">Success rate</div>
+        <div class="reading-value" id="m-success">—</div>
+        <div class="reading-delta" id="m-success-delta"></div>
+        <svg class="spark" id="spark-success" viewBox="0 0 240 30" preserveAspectRatio="none" aria-hidden="true"></svg>
+      </div>
+      <div class="panel reading-block">
+        <div class="micro">Latency p95</div>
+        <div class="reading-value" id="m-latency">—</div>
+        <div class="reading-delta" id="m-latency-delta"></div>
+        <svg class="spark" id="spark-latency" viewBox="0 0 240 30" preserveAspectRatio="none" aria-hidden="true"></svg>
+      </div>
+      <div class="panel reading-block">
+        <div class="micro">In window</div>
+        <div class="reading-value" id="m-txns">—</div>
+        <div class="reading-delta" id="m-window-note"></div>
+      </div>
+      <div class="panel reading-block">
+        <div class="micro">Patterns detected</div>
+        <div class="reading-value" id="m-patterns">—</div>
+        <div class="reading-delta">this cycle</div>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="panel">
+        <div class="panel-head"><span class="micro">Issuer health</span><span class="hint">Worst first</span></div>
+        <div class="panel-body flush" id="issuers"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span class="micro">Incidents</span><span class="hint">Detections collapsed into events</span></div>
+        <div class="panel-body flush scroll" id="incidents"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <span class="micro">Decision trace</span>
+        <span class="hint">Every alternative that was scored, not only the one chosen</span>
+      </div>
+      <div class="panel-body scroll" id="decisions"></div>
+    </section>
+
+    <section class="grid two">
+      <div class="panel">
+        <div class="panel-head"><span class="micro">Measured effect</span><span class="hint">Treated vs held-out control</span></div>
+        <div class="panel-body flush scroll" id="experiments"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span class="micro">Policy history</span><span class="hint">Append-only, attributed</span></div>
+        <div class="panel-body flush scroll" id="revisions"></div>
+      </div>
+    </section>
+
+    <p class="note">
+      Traffic is synthetic; the control plane is real. Every intervention here was
+      chosen by the agent, written to a versioned policy document that the traffic
+      source reads, and measured against a concurrent holdout &mdash; a slice of
+      traffic deliberately left unprotected so the effect can be attributed to the
+      action rather than to the incident ending on its own.
+    </p>
+  </main>
+</div>
+
+<script>
+const SNAPSHOT = {"generated_at":"2026-08-12T04:47:33.167352","agent":{"active":true,"cycle":33,"phase":"mitigating","window_minutes":5.0},"metrics":{"success_rate":0.9161157024793388,"latency":{"p50":201.00362436703415,"p95":287.7987820489967,"p99":324.0163079766437,"mean":199.95661790183385,"max":402.29954366318725},"transactions":7260,"retry_efficiency":0.5218579234972678},"counters":{"patterns_detected":30,"true_positives":0,"false_positives":0,"actions_attempted":30,"actions_executed":2,"alerts_raised":30},"issuers":[{"issuer":"AXIS_BANK","success_rate":0.43169398907103823,"volume":183,"p95":280.4619158153207,"broken":true},{"issuer":"RAZORPAY","success_rate":0.9163306451612904,"volume":992,"p95":282.9497212713533,"broken":false},{"issuer":"ICICI_BANK","success_rate":0.9176470588235294,"volume":1020,"p95":290.10450498454327,"broken":false},{"issuer":"KOTAK_BANK","success_rate":0.9216683621566633,"volume":983,"p95":283.24696174365465,"broken":false},{"issuer":"HDFC_BANK","success_rate":0.9315476190476191,"volume":1008,"p95":292.060306974622,"broken":false},{"issuer":"SBI","success_rate":0.9315589353612167,"volume":1052,"p95":290.03623776266215,"broken":false},{"issuer":"PAYTM_BANK","success_rate":0.9353233830845771,"volume":1005,"p95":286.48935314192624,"broken":false},{"issuer":"YES_BANK","success_rate":0.9459193706981318,"volume":1017,"p95":294.3718726982784,"broken":false}],"incidents":[{"incident_id":"inc-0001","pattern_type":"issuer_degradation","target":"AXIS_BANK","opened_at":"2026-08-12T04:46:04.206119","closed_at":null,"active":true,"detections":30,"peak_severity":1.0,"latest_severity":1.0,"latest_confidence":1.0,"duration_seconds":89.0,"actions_taken":["circuit_breaker","route_change"],"advice":null}],"experiments":[{"experiment_id":"exp-141f239a","action_id":"141f239a-6dfa-42ac-b028-f95569ae008d","action_type":"circuit_breaker","target":"AXIS_BANK","holdout_fraction":0.1,"active":true,"treatment":{"successes":608,"total":682},"control":{"successes":9,"total":83},"lift":0.7830618662332615,"lift_ci":[0.7122150918660369,0.853908640600486],"p_value":0.0,"significant":true,"verdict":"improved success rate by 78.3% (95% CI +71.2% to +85.4%, p=0.000, significant; n=682 vs 83)"}],"interventions":[{"action_id":"141f239a-6dfa-42ac-b028-f95569ae008d","type":"circuit_breaker","target":"AXIS_BANK","executed_at":"2026-08-12T04:46:04.207176"},{"action_id":"4ae99a49-6840-4629-bbac-8818170e78c6","type":"route_change","target":"AXIS_BANK","executed_at":"2026-08-12T04:46:07.216746"}],"control_plane":{"revision":3,"policy":{"revision":3,"parent_revision":2,"created_at":"2026-08-12T04:46:07.216697","author":"agent","reason":"route_change on AXIS_BANK","action_id":"4ae99a49-6840-4629-bbac-8818170e78c6","circuit_breakers":["AXIS_BANK"],"suppressed_methods":[],"retry_strategies":{},"routing_overrides":{"AXIS_BANK":{"alternative_routing":false,"reduce_routing_pct":50,"applied_at":"2026-08-12T04:46:07.216657"}},"holdouts":{"AXIS_BANK":0.1}},"history":[{"revision":3,"at":"2026-08-12T04:46:07.216697","author":"agent","reason":"route_change on AXIS_BANK","changes":["+ routing override: AXIS_BANK = reduce_routing_pct=50"]},{"revision":2,"at":"2026-08-12T04:46:04.207243","author":"agent","reason":"holdout for exp-141f239a","changes":[]},{"revision":1,"at":"2026-08-12T04:46:04.207087","author":"agent","reason":"circuit_breaker on AXIS_BANK","changes":["+ circuit breaker: AXIS_BANK"]},{"revision":0,"at":"2026-08-12T04:45:55.173316","author":"system","reason":"initial empty policy","changes":["initial policy"]}]},"decisions":[{"action_id":"4ae99a49-6840-4629-bbac-8818170e78c6","type":"route_change","target":"AXIS_BANK","at":"2026-08-12T04:46:07.216749","success":true,"message":"Routing adjusted for AXIS_BANK","parameters":{"issuer":"AXIS_BANK","reduce_routing_pct":50,"duration_minutes":15},"reasoning":"## Pattern Detected\n\nType: issuer_degradation\nSeverity: 0.94\nDescription: Issuer AXIS_BANK showing 28.3% drop in success rate\nConfidence: 1.00\n\n## Hypothesized Root Causes\n\n- issuer_down (probability: 0.37)\n- issuer_throttling (probability: 0.37)\n- network_issue (probability: 0.25)\n\n## Selected Action\n\nType: route_change\nTarget: AXIS_BANK\nRisk Level: low\nAuthorization: automatic\n\n## Expected Impact\n\n- Success Rate: 8.0% change\n- Latency: 20ms change\n- Cost: $0.010 per transaction\n- Affected Traffic: 4.8%\n\n## Alternatives Considered\n\n- no_action: score 0.30 (Success: 0.50, Latency: 0.50, Cost: 0.50, Risk: 1.00, Total: 0.30)","baseline":{"success_rate":0.9209090909090909,"avg_latency":198.691427503291,"transaction_volume":1100,"timestamp":"2026-08-12 04:46:07.216652"}},{"action_id":"141f239a-6dfa-42ac-b028-f95569ae008d","type":"circuit_breaker","target":"AXIS_BANK","at":"2026-08-12T04:46:04.207180","success":true,"message":"Circuit breaker activated for AXIS_BANK","parameters":{"issuer":"AXIS_BANK","duration_minutes":10,"route_to":"alternative_issuers"},"reasoning":"## Pattern Detected\n\nType: issuer_degradation\nSeverity: 0.83\nDescription: Issuer AXIS_BANK showing 25.0% drop in success rate\nConfidence: 1.00\n\n## Hypothesized Root Causes\n\n- issuer_down (probability: 0.37)\n- issuer_throttling (probability: 0.37)\n- network_issue (probability: 0.25)\n\n## Selected Action\n\nType: circuit_breaker\nTarget: AXIS_BANK\nRisk Level: medium\nAuthorization: automatic\n\n## Expected Impact\n\n- Success Rate: 15.0% change\n- Latency: -200ms change\n- Cost: $0.020 per transaction\n- Affected Traffic: 11.4%\n\n## Alternatives Considered\n\n- route_change: score 0.54 (Success: 0.67, Latency: 0.45, Cost: 0.45, Risk: 0.86, Total: 0.54)\n- no_action: score 0.34 (Success: 0.50, Latency: 0.50, Cost: 0.50, Risk: 1.00, Total: 0.34)","baseline":{"success_rate":0.9193181818181818,"avg_latency":197.57528975551045,"transaction_volume":880,"timestamp":"2026-08-12 04:46:04.207069"}}],"scenarios":[{"type":"issuer_degradation","expires_at":"2026-08-12T05:01:03.070298"},{"type":"retry_storm","expires_at":"2026-08-12T04:50:53.127498"}],"history":[{"cycle":1,"at":"2026-08-12T04:45:55.183991","success_rate":0.9590909090909091,"latency_p95":286.22376507736135,"latency_mean":203.37132045391482,"transactions":220,"patterns":0,"actions":0},{"cycle":2,"at":"2026-08-12T04:45:58.190183","success_rate":0.9522727272727273,"latency_p95":283.86079936196455,"latency_mean":201.0746595646865,"transactions":440,"patterns":0,"actions":0},{"cycle":3,"at":"2026-08-12T04:46:01.196405","success_rate":0.9454545454545454,"latency_p95":284.9419389805283,"latency_mean":200.3814019504122,"transactions":660,"patterns":0,"actions":0},{"cycle":4,"at":"2026-08-12T04:46:04.203512","success_rate":0.9193181818181818,"latency_p95":283.0758975687658,"latency_mean":197.57528975551045,"transactions":880,"patterns":1,"actions":1},{"cycle":5,"at":"2026-08-12T04:46:07.213237","success_rate":0.9209090909090909,"latency_p95":283.8219101301553,"latency_mean":198.691427503291,"transactions":1100,"patterns":1,"actions":1},{"cycle":6,"at":"2026-08-12T04:46:10.224382","success_rate":0.9227272727272727,"latency_p95":285.9477947011304,"latency_mean":199.85170434019307,"transactions":1320,"patterns":1,"actions":0},{"cycle":7,"at":"2026-08-12T04:46:13.236205","success_rate":0.924025974025974,"latency_p95":285.9477947011304,"latency_mean":199.617333314818,"transactions":1540,"patterns":1,"actions":0},{"cycle":8,"at":"2026-08-12T04:46:16.247059","success_rate":0.925,"latency_p95":286.9505481292562,"latency_mean":199.92381628663068,"transactions":1760,"patterns":1,"actions":0},{"cycle":9,"at":"2026-08-12T04:46:19.259977","success_rate":0.9252525252525252,"latency_p95":287.0010762776203,"latency_mean":200.1724820349972,"transactions":1980,"patterns":1,"actions":0},{"cycle":10,"at":"2026-08-12T04:46:22.272867","success_rate":0.9263636363636364,"latency_p95":287.34839534946985,"latency_mean":200.48514276658983,"transactions":2200,"patterns":1,"actions":0},{"cycle":11,"at":"2026-08-12T04:46:25.286509","success_rate":0.9276859504132231,"latency_p95":287.1882325219639,"latency_mean":200.20544510396869,"transactions":2420,"patterns":1,"actions":0},{"cycle":12,"at":"2026-08-12T04:46:28.302809","success_rate":0.928409090909091,"latency_p95":287.7419740387227,"latency_mean":200.21826678471507,"transactions":2640,"patterns":1,"actions":0},{"cycle":13,"at":"2026-08-12T04:46:31.325027","success_rate":0.9293706293706294,"latency_p95":287.83704648529306,"latency_mean":200.48509248269573,"transactions":2860,"patterns":1,"actions":0},{"cycle":14,"at":"2026-08-12T04:46:34.341911","success_rate":0.9282467532467532,"latency_p95":287.83704648529306,"latency_mean":200.42437798988166,"transactions":3080,"patterns":1,"actions":0},{"cycle":15,"at":"2026-08-12T04:46:37.359065","success_rate":0.9296969696969697,"latency_p95":287.7419740387227,"latency_mean":200.56340072794046,"transactions":3300,"patterns":1,"actions":0},{"cycle":16,"at":"2026-08-12T04:46:40.384649","success_rate":0.9303977272727273,"latency_p95":287.6685998252655,"latency_mean":200.45036980073883,"transactions":3520,"patterns":1,"actions":0},{"cycle":17,"at":"2026-08-12T04:46:43.435494","success_rate":0.9323529411764706,"latency_p95":287.7419740387227,"latency_mean":200.72443216200355,"transactions":3740,"patterns":1,"actions":0},{"cycle":18,"at":"2026-08-12T04:46:46.465015","success_rate":0.930050505050505,"latency_p95":287.6685998252655,"latency_mean":200.4818854658211,"transactions":3960,"patterns":1,"actions":0},{"cycle":19,"at":"2026-08-12T04:46:49.490251","success_rate":0.9301435406698565,"latency_p95":287.79878204899677,"latency_mean":200.6422784895338,"transactions":4180,"patterns":1,"actions":0},{"cycle":20,"at":"2026-08-12T04:46:52.514833","success_rate":0.9293181818181818,"latency_p95":288.24011454712695,"latency_mean":200.5669811141121,"transactions":4400,"patterns":1,"actions":0},{"cycle":21,"at":"2026-08-12T04:46:55.541369","success_rate":0.9283549783549784,"latency_p95":288.24011454712695,"latency_mean":200.50421413563828,"transactions":4620,"patterns":1,"actions":0},{"cycle":22,"at":"2026-08-12T04:46:58.568191","success_rate":0.927892561983471,"latency_p95":288.39462569901644,"latency_mean":200.54800058740318,"transactions":4840,"patterns":1,"actions":0},{"cycle":23,"at":"2026-08-12T04:47:01.605516","success_rate":0.925296442687747,"latency_p95":288.2194132025722,"latency_mean":200.60294557208334,"transactions":5060,"patterns":1,"actions":0},{"cycle":24,"at":"2026-08-12T04:47:04.635647","success_rate":0.9229166666666667,"latency_p95":287.7987820489967,"latency_mean":200.19121530868983,"transactions":5280,"patterns":1,"actions":0},{"cycle":25,"at":"2026-08-12T04:47:07.664949","success_rate":0.9225454545454546,"latency_p95":287.7987820489967,"latency_mean":200.35772405014478,"transactions":5500,"patterns":1,"actions":0},{"cycle":26,"at":"2026-08-12T04:47:10.701684","success_rate":0.9223776223776223,"latency_p95":287.6685998252656,"latency_mean":200.23555727957486,"transactions":5720,"patterns":1,"actions":0},{"cycle":27,"at":"2026-08-12T04:47:13.741460","success_rate":0.9208754208754208,"latency_p95":287.7987820489967,"latency_mean":200.1578351221653,"transactions":5940,"patterns":1,"actions":0},{"cycle":28,"at":"2026-08-12T04:47:16.772281","success_rate":0.9206168831168832,"latency_p95":287.6861519304537,"latency_mean":200.1830606461065,"transactions":6160,"patterns":1,"actions":0},{"cycle":29,"at":"2026-08-12T04:47:19.804113","success_rate":0.9205329153605015,"latency_p95":287.5804377059686,"latency_mean":200.2717950674051,"transactions":6380,"patterns":1,"actions":0},{"cycle":30,"at":"2026-08-12T04:47:22.843293","success_rate":0.9186363636363636,"latency_p95":287.5804377059686,"latency_mean":200.02840339620366,"transactions":6600,"patterns":1,"actions":0},{"cycle":31,"at":"2026-08-12T04:47:25.892416","success_rate":0.9180351906158358,"latency_p95":287.741016405199,"latency_mean":199.83576091619295,"transactions":6820,"patterns":1,"actions":0},{"cycle":32,"at":"2026-08-12T04:47:28.929888","success_rate":0.9163352272727273,"latency_p95":287.5804377059686,"latency_mean":199.8985655869188,"transactions":7040,"patterns":1,"actions":0},{"cycle":33,"at":"2026-08-12T04:47:31.969102","success_rate":0.9161157024793388,"latency_p95":287.7987820489967,"latency_mean":199.95661790183385,"transactions":7260,"patterns":1,"actions":0}],"events":[{"seq":1,"kind":"scenario","at":"2026-08-12T04:46:03.070353","payload":{"kind":"issuer_degradation","issuer":"AXIS_BANK","severity":0.82,"duration":900}},{"seq":2,"kind":"incident_opened","at":"2026-08-12T04:46:04.208079","payload":{"incident_id":"inc-0001"}},{"seq":3,"kind":"action","at":"2026-08-12T04:46:04.208084","payload":{"action_id":"141f239a-6dfa-42ac-b028-f95569ae008d","type":"circuit_breaker","target":"AXIS_BANK","risk_level":"medium","score":0.745,"estimated_impact":{"success_rate_delta":0.15,"latency_delta_ms":-200.0,"cost_delta_per_txn":0.02,"affected_traffic_pct":0.11363636363636363},"reasoning":"## Pattern Detected\n\nType: issuer_degradation\nSeverity: 0.83\nDescription: Issuer AXIS_BANK showing 25.0% drop in success rate\nConfidence: 1.00\n\n## Hypothesized Root Causes\n\n- issuer_down (probability: 0.37)\n- issuer_throttling (probability: 0.37)\n- network_issue (probability: 0.25)\n\n## Selected Action\n\nType: circuit_breaker\nTarget: AXIS_BANK\nRisk Level: medium\nAuthorization: automatic\n\n## Expected Impact\n\n- Success Rate: 15.0% change\n- Latency: -200ms change\n- Cost: $0.020 per transaction\n- Affected Traffic: 11.4%\n\n## Alternatives Considered\n\n- route_change: score 0.54 (Success: 0.67, Latency: 0.45, Cost: 0.45, Risk: 0.86, Total: 0.54)\n- no_action: score 0.34 (Success: 0.50, Latency: 0.50, Cost: 0.50, Risk: 1.00, Total: 0.34)","rejected_alternatives":[]}},{"seq":4,"kind":"action","at":"2026-08-12T04:46:07.217967","payload":{"action_id":"4ae99a49-6840-4629-bbac-8818170e78c6","type":"route_change","target":"AXIS_BANK","risk_level":"low","score":0.565,"estimated_impact":{"success_rate_delta":0.08,"latency_delta_ms":20.0,"cost_delta_per_txn":0.01,"affected_traffic_pct":0.04772727272727273},"reasoning":"## Pattern Detected\n\nType: issuer_degradation\nSeverity: 0.94\nDescription: Issuer AXIS_BANK showing 28.3% drop in success rate\nConfidence: 1.00\n\n## Hypothesized Root Causes\n\n- issuer_down (probability: 0.37)\n- issuer_throttling (probability: 0.37)\n- network_issue (probability: 0.25)\n\n## Selected Action\n\nType: route_change\nTarget: AXIS_BANK\nRisk Level: low\nAuthorization: automatic\n\n## Expected Impact\n\n- Success Rate: 8.0% change\n- Latency: 20ms change\n- Cost: $0.010 per transaction\n- Affected Traffic: 4.8%\n\n## Alternatives Considered\n\n- no_action: score 0.30 (Success: 0.50, Latency: 0.50, Cost: 0.50, Risk: 1.00, Total: 0.30)","rejected_alternatives":[]}},{"seq":5,"kind":"scenario","at":"2026-08-12T04:46:53.128209","payload":{"kind":"retry_storm","duration":240}}],"traffic":{"rerouted":682,"held_out":83,"method_switched":0}};
+/*
+ * Shared-snapshot client.
+ *
+ * The live console streams; this one replays a captured session so the shared
+ * page shows behaviour rather than a still frame. The interesting thing about
+ * this system is a curve — success rate falling, the agent intervening, the
+ * curve recovering — and a static screenshot cannot show that.
+ *
+ * Render functions are intentionally the same shape as app.js so the two stay
+ * recognisably one product.
+ */
+
+const $ = (id) => document.getElementById(id);
+
+const pct = (v, d = 1) => (v === null || v === undefined ? '—' : `${(v * 100).toFixed(d)}%`);
+const ms = (v) => (v ? `${Math.round(v)}ms` : '—');
+const int = (v) => (v ?? 0).toLocaleString('en-US');
+const clock = (iso) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? '—'
+    : d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+};
+const esc = (s) =>
+  String(s ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const title = (s) => String(s ?? '').replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+
+const history = SNAPSHOT.history || [];
+
+/* ── Sparkline ─────────────────────────────────────────────────────────────
+ * A sparkline is a word, not a chart: which way is this going, nothing else.
+ * An area fill under the line and an emphasised endpoint give it enough
+ * weight to read at this size without becoming a figure in its own right. */
+function sparkline(el, values, { invert = false } = {}) {
+  if (!el || values.length < 2) return;
+  const W = 240, H = 30, pad = 4;
+  const lo = Math.min(...values), hi = Math.max(...values);
+  const span = hi - lo || 1;
+
+  const xy = values.map((v, i) => [
+    (i / (values.length - 1)) * W,
+    pad + (1 - (v - lo) / span) * (H - pad * 2),
+  ]);
+
+  const line = xy.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const area = `${xy[0][0]},${H} ${line} ${xy[xy.length - 1][0]},${H}`;
+
+  const rising = values[values.length - 1] >= values[0];
+  const good = invert ? !rising : rising;
+  const stroke = span === 0 ? 'var(--ink-4)' : good ? 'var(--settled)' : 'var(--failing)';
+  const [ex, ey] = xy[xy.length - 1];
+
+  el.innerHTML = `
+    <polygon points="${area}" fill="${stroke}" opacity="0.07" />
+    <polyline points="${line}" fill="none" stroke="${stroke}" stroke-width="1.5"
+      stroke-linejoin="round" stroke-linecap="round" />
+    <circle cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="2" fill="${stroke}" />`;
+}
+
+/* ── Static panels ─────────────────────────────────────────────────────────*/
+
+function renderIssuers() {
+  const host = $('issuers');
+  const rows = SNAPSHOT.issuers || [];
+  if (!rows.length) { host.innerHTML = '<div class="empty">No traffic.</div>'; return; }
+
+  host.innerHTML = rows.map((r) => {
+    const level = r.success_rate < 0.80 ? 'bad' : r.success_rate < 0.90 ? 'warn' : 'ok';
+    return `
+      <div class="row row-issuer" data-level="${level}">
+        <div class="row-name">
+          ${esc(r.issuer.replace(/_/g, ' '))}
+          ${r.broken ? '<span class="chip failing">broken</span>' : ''}
+        </div>
+        <div class="gauge"><i style="width:${(r.success_rate * 100).toFixed(1)}%" data-level="${level}"></i></div>
+        <div class="val num">${pct(r.success_rate)}</div>
+        <div class="val dim num">${int(r.volume)}</div>
+      </div>`;
+  }).join('');
+}
+
+/* An intervention that expires and is re-applied appends to the incident
+ * again. Show distinct actions with a count; a repeated row of identical
+ * chips reads as a rendering bug rather than as history. */
+function actionChips(actions) {
+  if (!actions || !actions.length) return '<span class="chip">no action yet</span>';
+  const counts = actions.reduce((acc, a) => ((acc[a] = (acc[a] || 0) + 1), acc), {});
+  return Object.entries(counts)
+    .map(([a, n]) => `<span class="chip accent">${esc(title(a))}${n > 1 ? ` ×${n}` : ''}</span>`)
+    .join(' ');
+}
+
+function renderIncidents() {
+  const host = $('incidents');
+  const rows = SNAPSHOT.incidents || [];
+  if (!rows.length) { host.innerHTML = '<div class="empty">No incidents.</div>'; return; }
+
+  host.innerHTML = rows.map((i) => {
+    const level = !i.active ? 'ok' : i.peak_severity >= 0.7 ? 'bad' : i.peak_severity >= 0.4 ? 'warn' : '';
+    const chip = level === 'bad' ? 'failing' : level === 'warn' ? 'watch' : '';
+    return `
+      <div class="incident" data-level="${level}">
+        <div class="incident-head">
+          <span class="incident-id">${esc(i.incident_id)}</span>
+          <span class="incident-title">${esc(title(i.pattern_type))} · ${esc(i.target.replace(/_/g, ' '))}</span>
+          <span class="chip ${i.active ? chip : 'settled'}">${i.active ? 'open' : 'resolved'}</span>
+        </div>
+        <div class="incident-meta">
+          <span>peak severity <b class="num">${i.peak_severity.toFixed(2)}</b></span>
+          <span>${int(i.detections)} detections</span>
+          <span>${Math.round(i.duration_seconds)}s</span>
+          ${actionChips(i.actions_taken)}
+        </div>
+        ${i.advice ? `<div class="incident-advice"><b>Agent assessment</b>${esc(i.advice)}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+/* The trace shows the alternatives that lost, which is what distinguishes a
+ * reasoning agent from a rules engine. */
+function renderDecisions() {
+  const host = $('decisions');
+  const rows = SNAPSHOT.decisions || [];
+  if (!rows.length) { host.innerHTML = '<div class="empty">No interventions.</div>'; return; }
+
+  host.innerHTML = rows.map((d, idx) => {
+    const sections = parseReasoning(d.reasoning);
+    return `
+      <details class="trace" ${idx === 0 ? 'open' : ''}>
+        <summary class="trace-summary">
+          <svg class="caret" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M3 1.5 L7 5 L3 8.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="trace-action">${esc(title(d.type))}</span>
+          <span class="trace-target">${esc(d.target.replace(/_/g, ' '))}</span>
+          <span class="chip ${d.success ? 'settled' : 'failing'}">${d.success ? 'applied' : 'refused'}</span>
+          <time class="trace-time">${clock(d.at)}</time>
+        </summary>
+        <div class="trace-detail">
+          ${sections.length
+            ? sections.map((s) => `
+                <h4 class="micro">${esc(s.heading)}</h4>
+                <ul>${s.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>`).join('')
+            : `<p>${esc(d.message)}</p>`}
+          <h4 class="micro">Parameters</h4>
+          <p><code>${esc(JSON.stringify(d.parameters))}</code></p>
+        </div>
+      </details>`;
+  }).join('');
+}
+
+function parseReasoning(text) {
+  if (!text) return [];
+  const out = [];
+  let cur = null;
+  for (const raw of String(text).split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith('## ')) { cur = { heading: line.slice(3).trim(), lines: [] }; out.push(cur); }
+    else if (cur) cur.lines.push(line.replace(/^[-•]\s*/, ''));
+  }
+  return out.filter((s) => s.lines.length);
+}
+
+function renderExperiments() {
+  const host = $('experiments');
+  const rows = SNAPSHOT.experiments || [];
+  if (!rows.length) { host.innerHTML = '<div class="empty">No experiments.</div>'; return; }
+
+  host.innerHTML = rows.map((e) => {
+    const t = e.treatment, c = e.control;
+    const tRate = t.total ? t.successes / t.total : 0;
+    const cRate = c.total ? c.successes / c.total : 0;
+    return `
+      <div class="experiment">
+        <div class="experiment-head">
+          <span class="incident-id">${esc(e.experiment_id)}</span>
+          <span class="incident-title">${esc(title(e.action_type))} · ${esc(e.target.replace(/_/g, ' '))}</span>
+          <span class="chip ${e.significant ? 'settled' : ''}">${e.significant ? 'significant' : 'gathering'}</span>
+        </div>
+        <div class="arm">
+          <span class="micro">Treated</span>
+          <div class="gauge"><i style="width:${(tRate * 100).toFixed(1)}%"></i></div>
+          <span class="arm-value">${pct(tRate)} <span style="color:var(--ink-3)">${int(t.total)}</span></span>
+        </div>
+        <div class="arm">
+          <span class="micro">Control</span>
+          <div class="gauge"><i style="width:${(cRate * 100).toFixed(1)}%" data-level="${cRate < 0.80 ? 'bad' : cRate < 0.90 ? 'warn' : 'ok'}"></i></div>
+          <span class="arm-value">${pct(cRate)} <span style="color:var(--ink-3)">${int(c.total)}</span></span>
+        </div>
+        ${e.lift_ci ? interval(e.lift_ci, e.lift) : ''}
+        <div class="ci-caption">${esc(e.verdict)}</div>
+      </div>`;
+  }).join('');
+}
+
+/* Draw the interval, not the point. +12% means something very different when
+ * the interval is [+10,+14] than when it is [-3,+27], and a bare number hides
+ * exactly the thing that decides whether the result means anything. */
+function interval(ci, point) {
+  const [lo, hi] = ci;
+  const bound = Math.max(Math.abs(lo), Math.abs(hi), 0.05) * 1.15;
+  const at = (v) => (((v + bound) / (2 * bound)) * 100).toFixed(2);
+  return `
+    <div class="ci">
+      <div class="ci-zero" style="left:${at(0)}%"></div>
+      <div class="ci-range" style="left:${at(lo)}%;width:${(at(hi) - at(lo)).toFixed(2)}%"></div>
+      <div class="ci-point" style="left:${at(point)}%"></div>
+    </div>`;
+}
+
+function renderRevisions() {
+  const host = $('revisions');
+  const rows = SNAPSHOT.control_plane?.history || [];
+  if (!rows.length) { host.innerHTML = '<div class="empty">No policy changes.</div>'; return; }
+
+  host.innerHTML = rows.map((r) => `
+    <div class="revision">
+      <div class="revision-no">r${r.revision}</div>
+      <div>
+        <div class="revision-reason">${esc(r.reason)}</div>
+        <div class="revision-author">${esc(r.author)} · ${clock(r.at)}</div>
+        ${r.changes.map((c) => {
+          const cls = c.startsWith('+') ? 'add' : c.startsWith('-') ? 'remove' : '';
+          return `<div class="revision-change ${cls}">${esc(c)}</div>`;
+        }).join('')}
+      </div>
+    </div>`).join('');
+}
+
+/* ── Replay ────────────────────────────────────────────────────────────────*/
+
+const PHASE_NOTE = {
+  observing: 'Watching the stream. No intervention in force.',
+  monitoring: 'An intervention is live and being measured.',
+  mitigating: 'Incident open. The agent is acting on it now.',
+};
+
+/* Phase is derived from the captured timeline: before the first intervention
+ * the agent was observing, during an open incident it was mitigating. */
+function phaseAt(index) {
+  const point = history[index];
+  if (!point) return 'observing';
+  if (point.actions > 0 || point.patterns > 2) return 'mitigating';
+  const acted = history.slice(0, index + 1).some((h) => h.actions > 0);
+  return acted ? 'monitoring' : 'observing';
+}
+
+function paintFrame(index) {
+  const point = history[index];
+  if (!point) return;
+
+  const window = history.slice(0, index + 1);
+  const phase = phaseAt(index);
+
+  $('phase').textContent = phase;
+  $('state').dataset.phase = phase;
+  $('phase-note').textContent = PHASE_NOTE[phase];
+
+  $('cycle').textContent = int(point.cycle);
+  $('m-success').textContent = pct(point.success_rate);
+  $('m-latency').textContent = ms(point.latency_p95);
+  $('m-txns').textContent = int(point.transactions);
+  $('m-patterns').textContent = int(point.patterns);
+  $('m-window-note').textContent = '5 minute window';
+
+  const prior = history[index - 1];
+  if (prior) {
+    setDelta($('m-success-delta'), (point.success_rate - prior.success_rate) * 100, 'pts', 1);
+    setDelta($('m-latency-delta'), prior.latency_p95 - point.latency_p95, 'ms faster', 0);
+  } else {
+    $('m-success-delta').textContent = '';
+    $('m-latency-delta').textContent = '';
+  }
+
+  sparkline($('spark-success'), window.map((h) => h.success_rate));
+  sparkline($('spark-latency'), window.map((h) => h.latency_p95), { invert: true });
+
+  // Counters accumulate, so scale them to how far through the replay we are
+  const share = (index + 1) / history.length;
+  const c = SNAPSHOT.counters || {};
+  const traffic = SNAPSHOT.traffic || {};
+  $('revision').textContent = `r${Math.round((SNAPSHOT.control_plane?.revision || 0) * share)}`;
+  $('stat-actions').textContent = int(Math.round((c.actions_executed || 0) * share));
+  $('stat-alerts').textContent = int(Math.round((c.alerts_raised || 0) * share));
+  $('stat-rerouted').textContent = int(Math.round((traffic.rerouted || 0) * share));
+  $('stat-holdout').textContent = int(Math.round((traffic.held_out || 0) * share));
+
+  $('scrub').value = String(index);
+  $('replay-note').textContent =
+    `Cycle ${point.cycle} of ${history[history.length - 1].cycle} · recorded run`;
+}
+
+function setDelta(el, value, unit, digits) {
+  if (!el) return;
+  if (Math.abs(value) < (digits ? 0.05 : 5)) {
+    el.textContent = 'steady';
+    el.className = 'reading-delta';
+    return;
+  }
+  el.textContent = `${value > 0 ? '+' : ''}${value.toFixed(digits)} ${unit}`;
+  el.className = 'reading-delta ' + (value > 0 ? 'up' : 'down');
+}
+
+let cursor = 0;
+let timer = null;
+
+function play() {
+  stop();
+  timer = setInterval(() => {
+    cursor = (cursor + 1) % history.length;
+    paintFrame(cursor);
+  }, 700);
+  $('play').textContent = 'Pause';
+}
+
+function stop() {
+  if (timer) clearInterval(timer);
+  timer = null;
+  $('play').textContent = 'Play';
+}
+
+function init() {
+  renderIssuers();
+  renderIncidents();
+  renderDecisions();
+  renderExperiments();
+  renderRevisions();
+
+  if (!history.length) return;
+
+  $('scrub').max = String(history.length - 1);
+  $('scrub').addEventListener('input', (event) => {
+    stop();
+    cursor = Number(event.target.value);
+    paintFrame(cursor);
+  });
+  $('play').addEventListener('click', () => (timer ? stop() : play()));
+
+  paintFrame(0);
+
+  const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (still) {
+    cursor = history.length - 1;
+    paintFrame(cursor);
+    stop();
+  } else {
+    play();
+  }
+}
+
+init();
+
+</script>
