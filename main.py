@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 
 from src.factory import build_system
+from src.store.journal import SQLiteJournal
 
 # Cycle cadences. Driven off an explicit next-run timestamp rather than
 # `int(elapsed) % N == 0`, which silently skips any N the sleep interval
@@ -12,7 +13,7 @@ CYCLE_INTERVAL = 15
 CONTINUOUS_CYCLE_INTERVAL = 30
 
 
-def run_demo_scenario():
+def run_demo_scenario(journal=None):
     
     print("=" * 80)
     print("AGENTIC AI PAYMENT OPERATIONS SYSTEM - DEMONSTRATION")
@@ -23,6 +24,7 @@ def run_demo_scenario():
     # The simulator is wired to the agent's control plane, so interventions
     # actually move the metrics the agent then observes.
     agent, simulator, settings = build_system(
+        journal=journal,
         window_size_minutes=5,
         analysis_interval_seconds=CYCLE_INTERVAL,
         # The demo runs for a few minutes, so score outcomes sooner than the
@@ -177,12 +179,12 @@ def run_demo_scenario():
     print("=" * 80)
 
 
-def run_continuous(duration_minutes: int = 60):
+def run_continuous(duration_minutes: int = 60, journal=None):
     """Run continuous operation with periodic scenario injection"""
     
     print(f"Starting continuous operation for {duration_minutes} minutes...")
     
-    agent, simulator, _settings = build_system()
+    agent, simulator, _settings = build_system(journal=journal)
     
     # Run for specified duration
     start_time = time.time()
@@ -237,13 +239,27 @@ def main():
         default=60,
         help='Duration in minutes for continuous mode'
     )
+    parser.add_argument(
+        '--journal',
+        nargs='?',
+        const='data/journal.db',
+        default=None,
+        help='Record everything to a SQLite journal (default: data/journal.db)'
+    )
     
     args = parser.parse_args()
     
-    if args.mode == 'demo':
-        run_demo_scenario()
-    else:
-        run_continuous(duration_minutes=args.duration)
+    journal = SQLiteJournal(args.journal, label=args.mode) if args.journal else None
+
+    try:
+        if args.mode == 'demo':
+            run_demo_scenario(journal=journal)
+        else:
+            run_continuous(duration_minutes=args.duration, journal=journal)
+    finally:
+        if journal:
+            journal.close()
+            print(f"\nJournal written to {args.journal}")
 
 
 if __name__ == '__main__':

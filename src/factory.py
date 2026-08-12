@@ -25,12 +25,17 @@ def build_settings(config_dir: Optional[Path] = None) -> Settings:
     return Settings.load(config_dir)
 
 
-def build_agent(settings: Optional[Settings] = None, **overrides) -> PaymentAgent:
+def build_agent(
+    settings: Optional[Settings] = None,
+    journal=None,
+    **overrides
+) -> PaymentAgent:
     """
     Construct a PaymentAgent from settings.
 
     Args:
         settings: Loaded settings; defaults are used when omitted.
+        journal: Optional durable journal; omitted means record nothing.
         **overrides: Direct PaymentAgent keyword overrides, applied last, for
             tests and demos that want to differ from config on one axis.
     """
@@ -46,6 +51,7 @@ def build_agent(settings: Optional[Settings] = None, **overrides) -> PaymentAgen
         'auto_approve_low_risk': settings.agent.auto_approve_low_risk,
         'min_severity_to_act': settings.agent.min_severity_to_act,
         'outcome_evaluation_seconds': settings.agent.outcome_evaluation_seconds,
+        'journal': journal,
     }
     agent_kwargs.update(overrides)
 
@@ -96,6 +102,7 @@ def build_simulator(
 
 def build_system(
     settings: Optional[Settings] = None,
+    journal=None,
     **overrides
 ) -> Tuple[PaymentAgent, PaymentSimulator, Settings]:
     """
@@ -105,6 +112,6 @@ def build_system(
     agent's interventions actually affect the traffic it observes.
     """
     settings = settings or build_settings()
-    agent = build_agent(settings, **overrides)
+    agent = build_agent(settings, journal=journal, **overrides)
     simulator = build_simulator(settings, control_plane=agent.state)
     return agent, simulator, settings

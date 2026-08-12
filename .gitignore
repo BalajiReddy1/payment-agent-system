@@ -33,3 +33,11 @@ build/
 # Local development
 .env
 .env.local
+
+# Decision journal (see src/store/journal.py) and its WAL sidecars
+*.db
+*.db-wal
+*.db-shm
+
+# Test artefacts
+.pytest_cache/

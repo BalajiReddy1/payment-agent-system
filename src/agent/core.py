@@ -22,6 +22,8 @@ from src.agent.executor import PaymentExecutor
 from src.agent.learner import PaymentLearner
 from src.agent.observer import PaymentObserver
 from src.agent.reasoner import PaymentReasoner
+from src.control.plane import ControlPlane
+from src.store.journal import NullJournal
 
 
 class PaymentAgent:
@@ -38,7 +40,8 @@ class PaymentAgent:
         analysis_interval_seconds: int = 30,
         auto_approve_low_risk: bool = True,
         min_severity_to_act: float = 0.3,
-        outcome_evaluation_seconds: int = 300
+        outcome_evaluation_seconds: int = 300,
+        journal=None
     ):
         """
         Initialize the payment agent.
@@ -52,15 +55,19 @@ class PaymentAgent:
                 its outcome is scored. Shorten it for demos; in production this
                 wants to be long enough for the effect to actually show up.
         """
+        # Durable record of what the agent saw, concluded and did. Defaults to
+        # a no-op so persistence stays opt-in and nothing has to branch on it.
+        self.journal = journal or NullJournal()
+
         # Core components
         self.observer = PaymentObserver(window_size_minutes=window_size_minutes)
         self.reasoner = PaymentReasoner()
         self.decision_maker = PaymentDecisionMaker()
         self.executor = PaymentExecutor()
         self.learner = PaymentLearner()
-        
-        # Agent state
-        self.state = AgentState()
+
+        # Agent state. The control plane journals every revision it publishes.
+        self.state = AgentState(control_plane=ControlPlane(journal=self.journal))
         self.memory = AgentMemory()
         
         # Configuration
@@ -92,10 +99,12 @@ class PaymentAgent:
         This is the entry point for streaming payment data.
         """
         self.observer.ingest_transaction(transaction)
-    
+        self.journal.record_transactions([transaction])
+
     def process_batch(self, transactions: List[PaymentTransaction]):
         """Process a batch of transactions"""
         self.observer.ingest_batch(transactions)
+        self.journal.record_transactions(transactions)
     
     def run_cycle(self) -> Dict:
         """
@@ -148,6 +157,8 @@ class PaymentAgent:
         results['cycle_duration_seconds'] = cycle_duration
         self.last_analysis_time = datetime.now()
         
+        self.journal.record_cycle(self.cycle_count, results)
+
         self.logger.info(
             f"Cycle #{self.cycle_count} completed in {cycle_duration:.2f}s - "
             f"{len(results['patterns_detected'])} patterns, "
@@ -178,6 +189,7 @@ class PaymentAgent:
         # Store in memory and account for them
         for pattern in patterns:
             self.memory.add_pattern(pattern)
+            self.journal.record_pattern(pattern, cycle=self.cycle_count)
         self.state.patterns_detected += len(patterns)
 
         # Generate hypotheses for each pattern
@@ -275,6 +287,7 @@ class PaymentAgent:
                 continue
 
             self.memory.add_action(action)
+            self.journal.record_action(action, cycle=self.cycle_count, score=score)
 
             results['actions_taken'].append({
                 'action_id': action.action_id,
@@ -363,6 +376,8 @@ class PaymentAgent:
             baseline = self.executor.baseline_for_action(action.action_id)
             if baseline:
                 self.learner.record_outcome(action, baseline, current_metrics)
+                self.journal.record_outcome(action, baseline, current_metrics)
+                self.journal.record_action(action, cycle=self.cycle_count)
 
         # Get learning summary
         learning_summary = self.learner.get_learning_summary()
