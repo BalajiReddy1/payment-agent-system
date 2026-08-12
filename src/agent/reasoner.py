@@ -6,8 +6,14 @@ Detects patterns, forms hypotheses, and analyzes payment behavior.
 import math
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
+from src.analysis.statistics import (
+    CusumDetector,
+    RateEstimate,
+    estimate_rate,
+    probability_below,
+)
 from src.models.state import Hypothesis, Pattern
 
 
@@ -28,6 +34,18 @@ class PaymentReasoner:
         # Patterns below this confidence are not reported at all. Raising it
         # trades recall for precision when the detectors are too noisy.
         self.min_confidence = min_confidence
+
+        # How many observations the learned baseline is worth when estimating
+        # a current rate. Low values react fast and over-react to small
+        # samples; high values are stable but slow to accept a real change.
+        self.prior_strength = 20.0
+
+        # Sequential detectors, one per issuer/method, keyed by dimension:value
+        self._detectors: Dict[str, CusumDetector] = {}
+
+        # Below this many observations, no amount of apparent degradation is
+        # worth reporting - the posterior would be dominated by the prior.
+        self.min_volume = 10
         
         # Baseline metrics (learned over time)
         self.baselines = {
@@ -117,36 +135,60 @@ class PaymentReasoner:
         for issuer, health in issuer_health.items():
             baseline = self.baselines['issuer_success_rates'][issuer]
             degradation = baseline - health['success_rate']
-            
-            # Only flag if volume is significant and degradation exceeds threshold
-            if health['volume'] >= 10 and degradation >= self.thresholds['issuer_degradation']:
-                severity = min(degradation / 0.3, 1.0)  # Normalize to 0-1
-                confidence = self._calculate_confidence(health['volume'], degradation)
-                
-                pattern = Pattern(
-                    pattern_id='',
-                    pattern_type='issuer_degradation',
-                    description=f'Issuer {issuer} showing {degradation:.1%} drop in success rate',
-                    severity=severity,
-                    confidence=confidence,
-                    affected_dimension='issuer',
-                    affected_value=issuer,
-                    metrics={
-                        'current_success_rate': health['success_rate'],
-                        'baseline_success_rate': baseline,
-                        'degradation': degradation,
-                        'volume': health['volume'],
-                        'avg_latency': health['avg_latency']
-                    },
-                    detected_at=datetime.now(),
-                    evidence=[
-                        f'Success rate: {health["success_rate"]:.2%} (baseline: {baseline:.2%})',
-                        f'Volume: {health["volume"]} transactions',
-                        f'Average latency: {health["avg_latency"]:.0f}ms'
-                    ]
+            volume = int(health['volume'])
+
+            if volume < self.min_volume or degradation < self.thresholds['issuer_degradation']:
+                continue
+
+            successes = int(round(health['success_rate'] * volume))
+            failures = volume - successes
+
+            confidence, estimate = self._rate_confidence(
+                successes, failures, baseline, self.thresholds['issuer_degradation']
+            )
+
+            detector = self._detector_for(f'issuer:{issuer}', baseline)
+
+            severity = min(degradation / 0.3, 1.0)  # Normalize to 0-1
+
+            evidence = [
+                f'Success rate: {health["success_rate"]:.2%} (baseline: {baseline:.2%})',
+                f'Posterior estimate: {estimate.mean:.1%} '
+                f'({estimate.credible_mass:.0%} CI {estimate.lower:.1%}-{estimate.upper:.1%})',
+                f'P(rate below baseline - {self.thresholds["issuer_degradation"]:.0%}) = {confidence:.1%}',
+                f'Volume: {volume} transactions',
+                f'Average latency: {health["avg_latency"]:.0f}ms',
+            ]
+            if detector.alarmed:
+                evidence.append(
+                    f'Sequential detector alarmed '
+                    f'(log-odds {detector.excess_failures:.1f} > {detector.threshold})'
                 )
-                patterns.append(pattern)
-        
+
+            pattern = Pattern(
+                pattern_id='',
+                pattern_type='issuer_degradation',
+                description=f'Issuer {issuer} showing {degradation:.1%} drop in success rate',
+                severity=severity,
+                confidence=confidence,
+                affected_dimension='issuer',
+                affected_value=issuer,
+                metrics={
+                    'current_success_rate': health['success_rate'],
+                    'baseline_success_rate': baseline,
+                    'degradation': degradation,
+                    'volume': volume,
+                    'avg_latency': health['avg_latency'],
+                    'posterior_mean': estimate.mean,
+                    'credible_lower': estimate.lower,
+                    'credible_upper': estimate.upper,
+                    'cusum_statistic': detector.excess_failures,
+                },
+                detected_at=datetime.now(),
+                evidence=evidence,
+            )
+            patterns.append(pattern)
+
         return patterns
     
     def _detect_retry_storms(self, observer) -> List[Pattern]:
@@ -356,20 +398,75 @@ class PaymentReasoner:
     
     def _calculate_confidence(self, sample_size: int, effect_size: float) -> float:
         """
-        Calculate confidence score based on sample size and effect size.
-        
-        Uses statistical principles: larger samples and stronger effects = higher confidence.
+        Confidence in a detection, from sample size and effect size.
+
+        Retained for pattern types that do not observe success/failure counts
+        directly (latency, error clusters). Where counts are available,
+        _rate_confidence gives an actual posterior probability instead of this
+        heuristic.
         """
         # Sample size factor (sigmoid function)
         size_confidence = 1 / (1 + math.exp(-0.05 * (sample_size - 50)))
-        
+
         # Effect size factor (linear with saturation)
         effect_confidence = min(effect_size / 0.3, 1.0)
-        
+
         # Combined confidence (geometric mean)
         confidence = math.sqrt(size_confidence * effect_confidence)
-        
+
         return min(max(confidence, 0.0), 1.0)
+
+    def _rate_confidence(
+        self,
+        successes: int,
+        failures: int,
+        baseline: float,
+        degradation_threshold: float,
+    ) -> Tuple[float, RateEstimate]:
+        """
+        Posterior probability that a success rate is genuinely degraded.
+
+        This is a real probability rather than a score: P(true rate < baseline
+        - threshold) given the evidence. It is what lets the agent tell "3
+        failures out of 4" from "300 out of 400" - identical observed rates,
+        very different evidence, and the old heuristic conflated them.
+
+        Returns:
+            Tuple of (probability degraded, the rate estimate itself)
+        """
+        estimate = estimate_rate(
+            successes, failures,
+            prior_mean=baseline,
+            prior_strength=self.prior_strength,
+        )
+        probability = probability_below(
+            successes, failures,
+            threshold=max(baseline - degradation_threshold, 1e-6),
+            prior_mean=baseline,
+            prior_strength=self.prior_strength,
+        )
+        return probability, estimate
+
+    def _detector_for(self, key: str, baseline: float) -> CusumDetector:
+        """Get (or create) the sequential detector tracking one issuer/method."""
+        detector = self._detectors.get(key)
+        if detector is None or abs(detector.baseline - baseline) > 0.01:
+            # Rebuild when the learned baseline has moved materially
+            detector = CusumDetector(
+                baseline=min(max(baseline, 0.05), 0.999),
+                degraded_rate=min(max(baseline - 0.05, 0.01), baseline - 0.001),
+            )
+            self._detectors[key] = detector
+        return detector
+
+    def observe_outcomes(self, key: str, baseline: float, outcomes: List[bool]):
+        """
+        Feed a sequence of success/failure outcomes to a sequential detector.
+
+        Kept separate from analyze() so the detector sees every transaction in
+        order, not just the aggregate the sliding window happens to hold.
+        """
+        self._detector_for(key, baseline).update_many(outcomes)
     
     def generate_hypotheses(self, pattern: Pattern) -> List[Hypothesis]:
         """

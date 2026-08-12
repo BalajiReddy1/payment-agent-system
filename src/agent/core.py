@@ -183,6 +183,13 @@ class PaymentAgent:
     
     def _reason_phase(self, results: Dict) -> List:
         """Reasoning phase - detect patterns and generate hypotheses"""
+        # Feed sequential detectors every outcome since the last cycle, in
+        # order. They notice a shifted rate that no single window would flag.
+        for key, outcomes in self.observer.drain_outcome_stream().items():
+            issuer = key.split(':', 1)[1]
+            baseline = self.reasoner.baselines['issuer_success_rates'][issuer]
+            self.reasoner.observe_outcomes(key, baseline, outcomes)
+
         # Detect patterns
         patterns = self.reasoner.analyze(self.observer)
 

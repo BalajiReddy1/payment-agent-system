@@ -49,6 +49,9 @@ class PaymentObserver:
         # Retry tracking (windowed)
         self.retry_stats = defaultdict(lambda: {'attempted': 0, 'succeeded': 0})
 
+        # Outcomes buffered for sequential detectors, drained once per cycle
+        self._outcome_stream: Dict[str, List[bool]] = defaultdict(list)
+
         # Latency is derived from the window on demand and memoised until the
         # window changes, so it can never drift out of sync with the counters.
         self._latency_cache: Dict[str, Dict[str, List[float]]] = {}
@@ -68,6 +71,12 @@ class PaymentObserver:
         self.transactions_window.append(transaction)
         self._add_to_stats(transaction)
 
+        # Buffer the outcome for sequential detection (order matters there,
+        # unlike the windowed aggregates)
+        self._outcome_stream[f'issuer:{transaction.issuer}'].append(
+            transaction.status == PaymentStatus.SUCCESS
+        )
+
         # Evict anything that has now aged out
         self._cleanup_old_transactions()
 
@@ -77,6 +86,17 @@ class PaymentObserver:
         """Ingest multiple transactions"""
         for transaction in transactions:
             self.ingest_transaction(transaction)
+
+    def drain_outcome_stream(self) -> Dict[str, List[bool]]:
+        """
+        Success/failure outcomes seen since the last drain, grouped by issuer.
+
+        Sequential detectors need every observation in arrival order, not the
+        aggregate the sliding window happens to hold when a cycle runs, so the
+        stream is buffered here and handed over once per cycle.
+        """
+        stream, self._outcome_stream = self._outcome_stream, defaultdict(list)
+        return stream
 
     def _cleanup_old_transactions(self):
         """Remove transactions outside the sliding window"""
