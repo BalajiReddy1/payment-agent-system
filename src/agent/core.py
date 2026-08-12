@@ -70,6 +70,9 @@ class PaymentAgent:
 
         # How long an intervention must run before its outcome is scored
         self.outcome_evaluation_seconds = outcome_evaluation_seconds
+
+        # Decision score an action must reach to be worth executing
+        self.min_action_score = 0.0
         
         # Logging
         self.logger = logging.getLogger(__name__)
@@ -241,6 +244,14 @@ class PaymentAgent:
         rejections = []
 
         for action, score, _ in ranked:
+            if score < self.min_action_score:
+                # Candidates are ranked, so nothing below this clears the bar
+                rejections.append(
+                    f"{action.action_type.value}: score {score:.2f} below "
+                    f"minimum {self.min_action_score:.2f}"
+                )
+                break
+
             if action.action_type == ActionType.NO_ACTION:
                 # The baseline out-scored every intervention: standing pat is
                 # the decision. Stop here rather than reaching past it.

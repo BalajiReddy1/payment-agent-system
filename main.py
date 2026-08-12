@@ -3,9 +3,7 @@ import random
 import time
 from datetime import datetime
 
-from src.agent.core import PaymentAgent
-from src.models.state import PaymentMethod
-from src.simulation.payment_simulator import PaymentSimulator
+from src.factory import build_system
 
 # Cycle cadences. Driven off an explicit next-run timestamp rather than
 # `int(elapsed) % N == 0`, which silently skips any N the sleep interval
@@ -21,20 +19,18 @@ def run_demo_scenario():
     print("=" * 80)
     print()
     
-    print("Initializing payment agent...")
-    agent = PaymentAgent(
+    print("Initializing payment agent and simulator from config/...")
+    # The simulator is wired to the agent's control plane, so interventions
+    # actually move the metrics the agent then observes.
+    agent, simulator, settings = build_system(
         window_size_minutes=5,
         analysis_interval_seconds=CYCLE_INTERVAL,
-        auto_approve_low_risk=True,
-        # The demo only runs for a few minutes, so score outcomes sooner than
-        # the production default or the learning phase never has any input.
-        outcome_evaluation_seconds=45
+        # The demo runs for a few minutes, so score outcomes sooner than the
+        # production default or the learning phase never has any input.
+        outcome_evaluation_seconds=45,
     )
-    
-    print("Initializing payment simulator...")
-    # The simulated world obeys the agent's control plane, so interventions
-    # actually move the metrics the agent then observes.
-    simulator = PaymentSimulator(base_success_rate=0.96, control_plane=agent.state)
+    print(f"  detection thresholds: {agent.reasoner.thresholds}")
+    print(f"  decision weights:     {agent.decision_maker.weights}")
     
     print("\n" + "=" * 80)
     print("PHASE 1: NORMAL OPERATION (60 seconds)")
@@ -140,7 +136,7 @@ def run_demo_scenario():
                     print(f"     {pattern['description']}")
             
             for action in results['actions_taken']:
-                print(f"  Action: {action['type']} - {action.get('reasoning_summary', '')[:100]}")
+                print(f"  Action: {action['type']} on {action['target']} (score {action.get('score', 0):.2f})")
         
         simulator.cleanup_expired_scenarios()
         time.sleep(2)
@@ -186,13 +182,7 @@ def run_continuous(duration_minutes: int = 60):
     
     print(f"Starting continuous operation for {duration_minutes} minutes...")
     
-    agent = PaymentAgent(
-        window_size_minutes=10,
-        analysis_interval_seconds=30,
-        auto_approve_low_risk=True
-    )
-    
-    simulator = PaymentSimulator(control_plane=agent.state)
+    agent, simulator, _settings = build_system()
     
     # Run for specified duration
     start_time = time.time()

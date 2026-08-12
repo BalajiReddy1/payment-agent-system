@@ -11,6 +11,12 @@ agent:
   # Automatically execute low-risk actions without approval
   auto_approve_low_risk: true
 
+  # Pattern severity below which the agent deliberately does nothing
+  min_severity_to_act: 0.3
+
+  # How long an intervention must run before its outcome is scored
+  outcome_evaluation_seconds: 300
+
 # Pattern Detection Thresholds
 thresholds:
   # Minimum confidence to report a pattern
@@ -24,6 +30,15 @@ thresholds:
   
   # Retry rate above which a retry storm is detected
   retry_storm_threshold: 0.15
+
+  # Success-rate drop that marks a payment method as fatigued
+  method_fatigue_threshold: 0.20
+
+  # Multiple of baseline p95 latency that counts as a spike
+  latency_spike_threshold: 1.5
+
+  # Occurrences of one error code in the window that form a cluster
+  error_cluster_threshold: 10
 
 # Learning Parameters
 learning:

@@ -25,9 +25,7 @@ from dashboard.components import (
     render_pattern_card,
 )
 from dashboard.styles import DARK_THEME
-from src.agent.core import PaymentAgent
-from src.safety.guardrails import SafetyGuardrails, SafetyLimits
-from src.simulation.payment_simulator import PaymentSimulator
+from src.factory import build_agent, build_settings, build_simulator
 
 REFRESH_SECONDS = 2.0
 CYCLE_INTERVAL_SECONDS = 5.0
@@ -47,20 +45,24 @@ st.markdown(DARK_THEME, unsafe_allow_html=True)
 # Initialize session state
 def init_session_state():
     """Initialize session state variables."""
+    if 'settings' not in st.session_state:
+        st.session_state.settings = build_settings()
+
     if 'agent' not in st.session_state:
-        st.session_state.agent = PaymentAgent(
+        st.session_state.agent = build_agent(
+            st.session_state.settings,
             window_size_minutes=5,
             analysis_interval_seconds=10,
-            auto_approve_low_risk=True
         )
-        # Force unified state
+        # Share the executor and state with the LLM tool layer so both surfaces
+        # act on one control plane and one decision log.
         st.session_state.agent.executor = shared_executor
         st.session_state.agent.state = shared_state
-    
+
     if 'simulator' not in st.session_state:
-        st.session_state.simulator = PaymentSimulator(
-            base_success_rate=0.95,
-            control_plane=st.session_state.agent.state
+        st.session_state.simulator = build_simulator(
+            st.session_state.settings,
+            control_plane=st.session_state.agent.state,
         )
     
     if 'cycle_history' not in st.session_state:
@@ -70,7 +72,7 @@ def init_session_state():
         st.session_state.last_cycle_time = 0
     
     if 'safety' not in st.session_state:
-        st.session_state.safety = SafetyGuardrails(SafetyLimits())
+        st.session_state.safety = st.session_state.agent.executor.guardrails
         
     if 'agent_result' not in st.session_state:
         st.session_state.agent_result = None

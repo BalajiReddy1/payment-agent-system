@@ -5,7 +5,7 @@ Learns from action outcomes to improve future decisions.
 
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from src.models.state import Action, Pattern
 from src.utils.stats import mean
@@ -22,7 +22,12 @@ class PaymentLearner:
     - Threshold adjustment
     """
     
-    def __init__(self):
+    def __init__(self, learning_rate: float = 0.1, min_samples_for_update: int = 3):
+        # How fast objective weights move, and how much evidence is required
+        # before an action's measured effectiveness is trusted at all.
+        self.learning_rate = learning_rate
+        self.min_samples_for_update = min_samples_for_update
+
         # Action effectiveness tracking
         self.action_outcomes: Dict[str, List[Dict]] = defaultdict(list)
         
@@ -258,7 +263,7 @@ class PaymentLearner:
         # Action effectiveness
         for action_key in self.action_outcomes.keys():
             effectiveness = self.get_action_effectiveness(action_key)
-            if effectiveness['sample_size'] >= 3:  # Only include if enough samples
+            if effectiveness['sample_size'] >= self.min_samples_for_update:
                 summary['action_effectiveness'][action_key] = effectiveness
         
         # Pattern accuracy
@@ -268,7 +273,7 @@ class PaymentLearner:
         # Top actions by effectiveness
         action_scores = []
         for action_key, outcomes in self.action_outcomes.items():
-            if len(outcomes) >= 3:
+            if len(outcomes) >= self.min_samples_for_update:
                 effectiveness = self.get_action_effectiveness(action_key)
                 score = (
                     effectiveness['avg_success_improvement'] * 0.6 +
@@ -291,13 +296,16 @@ class PaymentLearner:
     def update_decision_weights(
         self,
         decision_maker,
-        learning_rate: float = 0.1
+        learning_rate: Optional[float] = None
     ):
         """
         Update decision maker's objective weights based on outcomes.
         
         This implements a simple reinforcement learning approach.
         """
+        if learning_rate is None:
+            learning_rate = self.learning_rate
+
         # Calculate correlation between each objective and actual success
         objective_scores = {
             'success_rate': [],

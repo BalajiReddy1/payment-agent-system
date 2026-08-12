@@ -31,10 +31,14 @@ rollback_triggers:
 
 # Authorization Levels
 authorization:
-  # Actions that can run automatically
+  # Actions that can run automatically.
+  # Every action the agent implements must appear under exactly one tier;
+  # startup fails if any is left unclassified, so a new capability can never
+  # default into being autonomously executable.
   automatic:
     - adjust_retry
     - alert_ops
+    - no_action
   
   # Actions requiring semi-automatic approval
   semi_automatic:

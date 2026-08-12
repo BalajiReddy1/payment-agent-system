@@ -22,8 +22,12 @@ class PaymentReasoner:
     - Evidence gathering
     """
     
-    def __init__(self, baseline_window_hours: int = 24):
+    def __init__(self, baseline_window_hours: int = 24, min_confidence: float = 0.0):
         self.baseline_window = timedelta(hours=baseline_window_hours)
+
+        # Patterns below this confidence are not reported at all. Raising it
+        # trades recall for precision when the detectors are too noisy.
+        self.min_confidence = min_confidence
         
         # Baseline metrics (learned over time)
         self.baselines = {
@@ -95,10 +99,14 @@ class PaymentReasoner:
         patterns.extend(self._detect_latency_spikes(observer))
         patterns.extend(self._detect_error_clusters(observer))
         patterns.extend(self._detect_geographic_issues(observer))
-        
+
+        # Drop anything we are not confident enough to report
+        if self.min_confidence > 0:
+            patterns = [p for p in patterns if p.confidence >= self.min_confidence]
+
         # Sort by severity
         patterns.sort(key=lambda p: p.severity, reverse=True)
-        
+
         return patterns
     
     def _detect_issuer_degradation(self, observer) -> List[Pattern]:

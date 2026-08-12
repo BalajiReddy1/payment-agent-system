@@ -16,6 +16,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.agent.core import PaymentAgent
+from src.factory import build_agent, build_simulator, build_settings
 from src.models.state import PaymentMethod, PaymentStatus, PaymentTransaction
 from src.simulation.payment_simulator import PaymentSimulator
 
@@ -35,11 +36,7 @@ def get_agent() -> PaymentAgent:
     """Get or create agent instance."""
     global agent
     if agent is None:
-        agent = PaymentAgent(
-            window_size_minutes=10,
-            analysis_interval_seconds=30,
-            auto_approve_low_risk=True
-        )
+        agent = build_agent(build_settings())
     return agent
 
 
@@ -49,10 +46,7 @@ def get_simulator() -> PaymentSimulator:
     if simulator is None:
         # Bound to the agent's state so the simulated world responds to
         # whatever the agent does to the control plane.
-        simulator = PaymentSimulator(
-            base_success_rate=0.95,
-            control_plane=get_agent().state
-        )
+        simulator = build_simulator(build_settings(), control_plane=get_agent().state)
     return simulator
 
 

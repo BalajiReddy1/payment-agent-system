@@ -45,8 +45,8 @@ class PaymentSimulator:
     def __init__(self, base_success_rate: float = 0.95, control_plane=None):
         self.base_success_rate = base_success_rate
 
-        # Anything exposing active_circuit_breakers, suppressed_methods,
-        # retry_strategies and routing_overrides. AgentState satisfies this.
+        # An AgentState, a ControlPlane, or a ControlPlaneRevision; all three
+        # are normalised in _policy(). None means "obey nothing".
         self.control_plane = control_plane
 
         # Counters so a demo can show the control plane is actually biting
@@ -180,19 +180,35 @@ class PaymentSimulator:
         """Attach the state object whose interventions this traffic obeys."""
         self.control_plane = control_plane
 
-    def _cp(self, attribute: str, default):
+    def _policy(self):
         """
-        Read a policy field from whatever control plane is attached.
+        Resolve whatever was attached down to a single ControlPlaneRevision.
 
-        Accepts either a ControlPlane (reads its current revision) or anything
-        exposing the four policy attributes directly, such as AgentState.
+        Accepts an AgentState, a ControlPlane, or a revision itself. Everything
+        is normalised to a revision so there is exactly one set of field names
+        to read; supporting several shapes with different attribute names is
+        how a control plane ends up silently ignored.
         """
         source = self.control_plane
         if source is None:
+            return None
+
+        control_plane = getattr(source, 'control_plane', None)
+        if control_plane is not None:  # an AgentState
+            source = control_plane
+
+        current = getattr(source, 'current', None)
+        if current is not None:  # a ControlPlane
+            return current
+
+        return source  # already a revision
+
+    def _cp(self, attribute: str, default):
+        """Read one policy field from the revision currently in force."""
+        policy = self._policy()
+        if policy is None:
             return default
-        if hasattr(source, 'current'):  # a ControlPlane
-            source = source.current
-        return getattr(source, attribute, default)
+        return getattr(policy, attribute, default)
 
     def _apply_routing(self, issuer: str) -> tuple:
         """
@@ -201,7 +217,7 @@ class PaymentSimulator:
         Returns:
             Tuple of (issuer to actually use, whether it was rerouted)
         """
-        breakers = self._cp('active_circuit_breakers', set())
+        breakers = self._cp('circuit_breakers', frozenset())
         overrides = self._cp('routing_overrides', {})
 
         divert = issuer in breakers
@@ -227,7 +243,7 @@ class PaymentSimulator:
 
     def _apply_method_suppression(self, method: PaymentMethod) -> PaymentMethod:
         """Swap a suppressed payment method for one that is still offered."""
-        suppressed = self._cp('suppressed_methods', set())
+        suppressed = self._cp('suppressed_methods', frozenset())
         if not suppressed or method.value not in suppressed:
             return method
 
