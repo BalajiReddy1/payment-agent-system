@@ -5,6 +5,7 @@ from datetime import datetime
 
 from src.factory import build_system
 from src.store.journal import SQLiteJournal
+from src.traffic import JournalReplaySource
 
 # Cycle cadences. Driven off an explicit next-run timestamp rather than
 # `int(elapsed) % N == 0`, which silently skips any N the sleep interval
@@ -223,15 +224,68 @@ def run_continuous(duration_minutes: int = 60, journal=None):
         time.sleep(3)
 
 
+def run_replay(journal_path: str, run_id=None):
+    """
+    Re-run a recorded incident against the current agent.
+
+    This is how a change to detection thresholds or decision policy gets
+    evaluated: same transactions, same order, so any difference in what the
+    agent does is caused by the change rather than by a fresh random draw.
+    """
+    journal = SQLiteJournal(journal_path, label='replay')
+
+    try:
+        runs = [r for r in journal.runs() if r['run_id'] != journal.run_id]
+        if not runs:
+            print(f"No recorded runs in {journal_path}. "
+                  f"Record one first: python main.py --mode demo --journal {journal_path}")
+            return
+
+        run_id = run_id or runs[0]['run_id']
+        source = JournalReplaySource(journal, run_id=run_id)
+
+        print("=" * 80)
+        print(f"REPLAY: {source.describe()}")
+        print("=" * 80)
+
+        agent, _simulator, _settings = build_system(window_size_minutes=5)
+
+        patterns = actions = 0
+        for batch in source.replay_all(batch_size=250):
+            agent.process_batch(batch)
+            results = agent.run_cycle()
+            patterns += len(results['patterns_detected'])
+            actions += len(results['actions_taken'])
+
+            for action in results['actions_taken']:
+                print(f"  cycle {results['cycle']}: "
+                      f"{action['type']} on {action['target']} "
+                      f"(score {action.get('score', 0):.2f})")
+
+        print("-" * 80)
+        print(f"Cycles run        : {agent.cycle_count}")
+        print(f"Patterns detected : {patterns}")
+        print(f"Actions taken     : {actions}")
+        print(f"Alerts raised     : {agent.state.alerts_raised}")
+        print(f"Rollbacks         : {agent.state.rollbacks_last_hour}")
+        print("\nControl plane changes:")
+        for revision in reversed(agent.state.control_plane.history()):
+            if revision.revision:
+                print(f"  r{revision.revision} [{revision.author}] {revision.reason}")
+    finally:
+        journal.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Agentic AI Payment Operations System'
     )
     parser.add_argument(
         '--mode',
-        choices=['demo', 'continuous'],
+        choices=['demo', 'continuous', 'replay'],
         default='demo',
-        help='Run mode: demo (guided scenario) or continuous'
+        help='Run mode: demo (guided scenario), continuous, or replay '
+             '(re-run a recorded incident from a journal)'
     )
     parser.add_argument(
         '--duration',
@@ -249,6 +303,10 @@ def main():
     
     args = parser.parse_args()
     
+    if args.mode == 'replay':
+        run_replay(args.journal or 'data/journal.db')
+        return
+
     journal = SQLiteJournal(args.journal, label=args.mode) if args.journal else None
 
     try:

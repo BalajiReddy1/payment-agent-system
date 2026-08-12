@@ -49,10 +49,22 @@ The system follows a **"Brain + Hands"** architecture:
 │   └──────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 │   ┌──────────────────────────────────────────────────────────────────┐   │
-│   │              🛡️ Safety Module (src/safety/)                      │   │
-│   │   • Guardrails (3-tier authorization)                            │   │
-│   │   • Rollback (automatic reversion on degradation)                │   │
-│   │   • Audit (immutable decision trail)                             │   │
+│   │              🛡️ Safety (src/safety/guardrails.py)                │   │
+│   │   • 3-tier authorization, enforced on every path                 │   │
+│   │   • Rate limits, blast radius, concurrency, min confidence       │   │
+│   └──────────────────────────────────────────────────────────────────┘   │
+│                                  │ the only way to change payment policy  │
+│   ┌──────────────────────────────▼───────────────────────────────────┐   │
+│   │           🗂️ Control Plane (src/control/plane.py)                │   │
+│   │   Versioned, append-only policy: breakers, suppressions,         │   │
+│   │   retry strategies, routing overrides. Every revision            │   │
+│   │   attributed; rollback derived from the revision, not hand-      │   │
+│   │   written per action type.                                       │   │
+│   └──────────────────────────────┬───────────────────────────────────┘   │
+│                                  │ read by the traffic source            │
+│   ┌──────────────────────────────▼───────────────────────────────────┐   │
+│   │   📝 Journal (src/store/) — transactions, patterns, actions,     │   │
+│   │   outcomes, revisions. Restart safety + incident replay.         │   │
 │   └──────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 │   ┌──────────────────────────────────────────────────────────────────┐   │
@@ -143,6 +155,43 @@ outcome scoring and learning measure something real rather than noise.
 Run `pytest` to see this asserted end to end: an injected issuer outage drops
 the success rate, and the agent's own intervention brings it back up.
 
+### 7b. 🗂️ Versioned Control Plane
+Every intervention is a change to one versioned policy document, and nothing
+changes payment behaviour by any other route. Each revision records **who**
+changed it, **why**, and **which action** caused it, so "why is UPI suppressed
+right now" always has an answer:
+
+```
+r0 [system] initial empty policy
+r1 [agent]  circuit_breaker on HDFC_BANK
+              + circuit breaker: HDFC_BANK
+r2 [agent]  route_change on HDFC_BANK
+              + routing override: HDFC_BANK = {'reduce_routing_pct': 50}
+```
+
+Rollback is *derived* rather than hand-written: each action records the
+revision it produced, and undoing it diffs that revision against its parent and
+applies the inverse. The inverse lands on current state, so withdrawing one
+intervention leaves any other still running untouched.
+
+### 7c. 📝 Decision Journal & Replay
+`--journal` records transactions, patterns, actions, outcomes and every control
+plane revision to SQLite (standard library — no server to run). Two things this
+buys:
+
+- **Restart safety.** `open_interventions()` finds actions recorded as executed
+  but never completed, so a restarted agent knows what it left running instead
+  of losing track of live changes to payment routing.
+- **Evaluation.** A recorded incident can be re-run against changed code:
+
+```bash
+python main.py --mode demo --journal data/journal.db   # record
+python main.py --mode replay --journal data/journal.db # re-run it
+```
+
+Same transactions, same order, so any difference in what the agent does comes
+from the change rather than a fresh random draw.
+
 ### 8. 🌐 MCP Server (Model Context Protocol)
 - All tools are also available as an MCP-compliant server (`mcp_server.py`)
 - Supports `stdio` transport for integration with external AI agents
@@ -166,15 +215,22 @@ payment-agent-system/
 │   │   ├── decision_maker.py     # Multi-objective decision engine
 │   │   ├── executor.py           # Action execution with safety guardrails
 │   │   └── learner.py            # Reinforcement learning from outcomes
+│   ├── control/
+│   │   └── plane.py              # Versioned policy document (the agent's only output)
+│   ├── store/
+│   │   └── journal.py            # Append-only decision journal (SQLite)
+│   ├── traffic/
+│   │   └── source.py             # TrafficSource interface + journal replay
 │   ├── models/
-│   │   └── state.py              # Agent state, memory & data models
+│   │   └── state.py              # Agent state, memory, data models & authorization tiers
 │   ├── safety/
-│   │   ├── guardrails.py         # 3-tier authorization levels & limits
-│   │   ├── rollback.py           # Automatic rollback on degradation
-│   │   └── audit.py              # Immutable decision audit trail
+│   │   └── guardrails.py         # Authorization tiers, rate limits & blast radius
 │   ├── simulation/
 │   │   └── payment_simulator.py  # Transaction & failure scenario simulation
+│   ├── factory.py                # Composition root: config -> wired objects
 │   └── utils/
+│       ├── settings.py           # Typed, validated configuration
+│       ├── stats.py              # Stdlib percentile/mean helpers
 │       ├── benchmark.py          # Performance benchmarking
 │       └── config_loader.py      # YAML configuration loader
 ├── api/
@@ -187,6 +243,7 @@ payment-agent-system/
 │   ├── agent_config.yaml         # Agent behavior thresholds
 │   ├── safety_rules.yaml         # Safety guardrail configuration
 │   └── simulation_config.yaml    # Simulator parameters
+├── tests/                        # pytest suite (98 tests)
 ├── data/
 │   ├── sample_payments.json      # Sample transaction data
 │   └── sample_payments.csv       # CSV format
