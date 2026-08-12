@@ -39,7 +39,7 @@ def test_snapshot_carries_every_section_a_client_renders():
     for section in (
         'agent', 'metrics', 'counters', 'issuers', 'incidents', 'approvals',
         'experiments', 'interventions', 'control_plane', 'decisions',
-        'scenarios', 'history', 'events', 'traffic',
+        'scenarios', 'history', 'events', 'traffic', 'recovered',
     ):
         assert section in snapshot, f'missing {section}'
 
@@ -217,3 +217,32 @@ def test_console_serves_exactly_the_shared_read_model():
     assert 'control_plane' not in source, 'the console is assembling its own view again'
 
     assert 'views.health' in inspect.getsource(server.AgentRunner.health)
+
+
+# ── Inherited interventions ──────────────────────────────────────────────────
+
+def test_the_snapshot_surfaces_what_the_agent_inherited():
+    """
+    An adopted circuit breaker has no incident behind it and nothing in the
+    decision trace. Without its own place in the view it is a live change to
+    payment routing that the page cannot explain - which is how one survived a
+    restart unnoticed.
+    """
+    agent, _ = running_agent(cycles=1, degrade=None)
+    agent.recovered = [{
+        'action_id': 'act-1', 'action_type': 'circuit_breaker', 'target': 'SBI',
+        'executed_at': '2026-08-12T05:00:00', 'approver': 'ops@example.com',
+    }]
+
+    rows = views.snapshot(agent)['recovered']
+
+    assert rows == [{
+        'action_id': 'act-1', 'type': 'circuit_breaker', 'target': 'SBI',
+        'executed_at': '2026-08-12T05:00:00', 'approver': 'ops@example.com',
+    }]
+
+
+def test_a_clean_start_shows_nothing_inherited():
+    agent, _ = running_agent(cycles=1, degrade=None)
+
+    assert views.snapshot(agent)['recovered'] == []

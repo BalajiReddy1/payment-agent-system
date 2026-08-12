@@ -147,6 +147,12 @@ class NullJournal:
     def record_revision(self, revision): pass
     def close(self): pass
 
+    # Recovery reads. A journal that recorded nothing has nothing to recover,
+    # so these answer "no prior state" rather than making the caller check
+    # which kind of journal it holds.
+    def open_interventions(self, run_id=None): return []
+    def last_revision(self): return None
+
 
 class SQLiteJournal:
     """
@@ -322,12 +328,37 @@ class SQLiteJournal:
         This is what makes restart safe: on startup the agent can find what it
         left running rather than losing track of live changes to payment
         routing.
+
+        Note the default. It used to be the *current* run, which at startup is
+        empty by definition - the interventions that survived the restart
+        belong to the run that died. So the query with no argument now spans
+        every run, and callers that want one pass it explicitly.
         """
+        if run_id is not None:
+            return self.query(
+                "SELECT * FROM actions WHERE run_id = ? AND executed_at IS NOT NULL "
+                "AND completed_at IS NULL ORDER BY executed_at",
+                (run_id,),
+            )
         return self.query(
-            "SELECT * FROM actions WHERE run_id = ? AND executed_at IS NOT NULL "
-            "AND completed_at IS NULL ORDER BY executed_at",
-            (run_id or self.run_id,),
+            "SELECT * FROM actions WHERE executed_at IS NOT NULL "
+            "AND completed_at IS NULL ORDER BY executed_at"
         )
+
+    def last_revision(self) -> Optional[dict]:
+        """
+        The most recently recorded control plane revision, across all runs.
+
+        Ordered by when it was written rather than by revision number: numbers
+        restart at zero with each run, so the highest number is not the latest
+        policy - it is whichever run happened to live longest.
+        """
+        rows = self.query(
+            "SELECT r.policy FROM revisions r "
+            "JOIN runs ON runs.run_id = r.run_id "
+            "ORDER BY runs.started_at DESC, r.revision DESC LIMIT 1"
+        )
+        return json.loads(rows[0]['policy']) if rows else None
 
     def effectiveness_by_action_type(self) -> List[sqlite3.Row]:
         """Measured outcomes grouped by action type, across all runs."""

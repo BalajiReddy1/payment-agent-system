@@ -73,6 +73,7 @@ def snapshot(
         'approvals': status.get('approvals', []),
         'experiments': status.get('experiments', []),
         'interventions': status.get('active_interventions', []),
+        'recovered': recovered(agent),
         'control_plane': control_plane(plane),
         'decisions': decisions(agent),
         'history': list(history or []),
@@ -80,6 +81,27 @@ def snapshot(
     }
     view.update(traffic(simulator))
     return view
+
+
+def recovered(agent) -> List[Dict[str, Any]]:
+    """
+    Interventions this agent inherited from a previous run rather than chose.
+
+    Worth its own place in the view. An adopted circuit breaker has no incident
+    behind it and no decision trace to open - it is a live change to payment
+    routing that nothing on the page would otherwise explain, which is exactly
+    the state that let one survive a restart unnoticed in the first place.
+    """
+    return [
+        {
+            'action_id': row.get('action_id'),
+            'type': row.get('action_type'),
+            'target': row.get('target'),
+            'executed_at': row.get('executed_at'),
+            'approver': row.get('approver'),
+        }
+        for row in getattr(agent, 'recovered', [])
+    ]
 
 
 def phase(agent) -> str:

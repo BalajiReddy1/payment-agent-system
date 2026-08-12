@@ -25,7 +25,7 @@ from src.agent.incidents import IncidentTracker
 from src.agent.reasoner import PaymentReasoner
 from src.analysis.experiment import ExperimentRegistry
 from src.analysis.memory import IncidentMemory
-from src.control.plane import ControlPlane
+from src.control.plane import ControlPlane, ControlPlaneRevision
 from src.safety.approvals import ApprovalQueue, needs_human
 from src.store.journal import NullJournal
 
@@ -136,7 +136,51 @@ class PaymentAgent:
         # Metrics
         self.cycle_count = 0
         self.last_analysis_time = None
-    
+
+        # Interventions inherited from a previous run, kept so an operator can
+        # see what this agent adopted rather than decided.
+        self.recovered: List[Dict] = []
+
+    def recover(self) -> List[Dict]:
+        """
+        Adopt whatever the previous run left in force.
+
+        A restarted agent's control plane starts empty, but the policy the
+        previous one published is still being obeyed by whatever routes
+        payments. Without this the new agent cannot see those interventions, so
+        it never expires or rolls them back: a circuit breaker outlives the
+        process that opened it and stays shut on an issuer that recovered
+        hours ago.
+
+        Called by the factory when a journal is supplied. Safe to call when
+        there is nothing to recover, and safe to call twice - adopting an
+        identical policy publishes no revision.
+
+        Returns:
+            The open interventions found, as dicts, for logging and display.
+        """
+        recorded = self.journal.last_revision()
+        if recorded:
+            previous = ControlPlaneRevision.from_dict(recorded)
+            if not previous.is_empty() or previous.holdouts:
+                self.state.control_plane.adopt(previous)
+                self.logger.warning(
+                    "Recovered policy from a previous run: %s. These are in "
+                    "force now and this agent is responsible for ending them.",
+                    ', '.join(sorted(previous.circuit_breakers
+                                     | previous.suppressed_methods
+                                     | set(previous.routing_overrides))) or 'holdouts only',
+                )
+
+        self.recovered = [dict(row) for row in self.journal.open_interventions()]
+        if self.recovered:
+            self.logger.warning(
+                "%d intervention(s) executed but never completed before the "
+                "last shutdown", len(self.recovered)
+            )
+        return self.recovered
+
+
     def process_transaction(self, transaction: PaymentTransaction):
         """
         Process a single incoming transaction.

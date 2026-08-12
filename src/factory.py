@@ -88,6 +88,13 @@ def build_agent(
         ACTION_AUTHORIZATION.update(settings.authorization)
         logger.info("Authorization tiers loaded from safety_rules.yaml")
 
+    # Adopt whatever a previous run left in force. Done here rather than in
+    # the constructor because it is a property of *this* deployment having
+    # durable state, not of what a PaymentAgent is - a test building an agent
+    # with a scratch journal should not inherit a stranger's circuit breakers.
+    if journal is not None:
+        agent.recover()
+
     return agent
 
 

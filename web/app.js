@@ -175,6 +175,34 @@ function renderIncidents(s) {
 
 /* The decision trace is the screen that proves this is reasoning rather than
  * a rules engine, so it shows the alternatives that lost, not only the winner. */
+/* Interventions this agent inherited rather than chose. They have no incident
+ * behind them and nothing in the decision trace, so without their own panel
+ * they are a live change to payment routing that the page cannot explain —
+ * which is how one survived a restart unnoticed in the first place. */
+function renderRecovered(s) {
+  const panel = $('recovered-panel');
+  const rows = s.recovered || [];
+
+  panel.hidden = rows.length === 0;
+  if (!rows.length) return;
+
+  $('recovered').innerHTML = rows.map((r) => `
+    <div class="row approval" data-level="warn">
+      <div>
+        <div class="row-name">
+          ${escape(title(r.type))} · ${escape((r.target || '').replace(/_/g, ' '))}
+          <span class="chip watch">inherited</span>
+        </div>
+        <div class="approval-meta">
+          <span class="incident-id">${escape(r.action_id || '')}</span>
+          ${r.approver ? `<span>approved by ${escape(r.approver)}</span>` : ''}
+          ${r.executed_at ? `<span>since ${escape(String(r.executed_at).slice(0, 19).replace('T', ' '))}</span>` : ''}
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
 /* Approvals are the one panel that asks something of the reader, so it sits
  * above the trace and hides itself entirely when the queue is empty rather
  * than showing a permanent "nothing to do" box. */
@@ -352,6 +380,7 @@ function render(snapshot) {
   renderIssuers(snapshot);
   renderIssuerOptions(snapshot);
   renderIncidents(snapshot);
+  renderRecovered(snapshot);
   renderApprovals(snapshot);
   renderDecisions(snapshot);
   renderExperiments(snapshot);

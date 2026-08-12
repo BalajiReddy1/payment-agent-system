@@ -79,6 +79,29 @@ class ControlPlaneRevision:
             'holdouts': dict(self.holdouts),
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ControlPlaneRevision':
+        """
+        Rebuild a revision from its recorded form.
+
+        The inverse of to_dict(), and the thing that makes a restart safe: an
+        agent that cannot read back what it published has no way to learn about
+        the interventions it left in force.
+        """
+        return cls(
+            revision=data['revision'],
+            created_at=datetime.fromisoformat(data['created_at']),
+            author=data.get('author', 'unknown'),
+            reason=data.get('reason', ''),
+            parent_revision=data.get('parent_revision'),
+            action_id=data.get('action_id'),
+            circuit_breakers=frozenset(data.get('circuit_breakers') or ()),
+            suppressed_methods=frozenset(data.get('suppressed_methods') or ()),
+            retry_strategies=dict(data.get('retry_strategies') or {}),
+            routing_overrides=dict(data.get('routing_overrides') or {}),
+            holdouts=dict(data.get('holdouts') or {}),
+        )
+
 
 class ControlPlane:
     """
@@ -131,6 +154,32 @@ class ControlPlane:
     def subscribe(self, listener):
         """Register a callable invoked with each newly published revision."""
         self._listeners.append(listener)
+
+    def adopt(self, revision: ControlPlaneRevision, reason: str = 'recovered after restart'):
+        """
+        Take over a policy published by a previous run.
+
+        A restarted agent's control plane starts empty, but the interventions
+        the previous one published are still in force in whatever is routing
+        payments. Without this the new agent cannot see them, so it will never
+        expire or roll them back - a circuit breaker survives the process that
+        created it and stays shut forever.
+
+        The adopted state is published as a *new* revision rather than
+        rewinding the counter. What happened, happened: the log records that
+        this agent inherited a policy at a point in time, which is a different
+        event from the one that created it, and rollback still works because
+        the new revision has a parent to diff against.
+        """
+        return self._publish(
+            circuit_breakers=frozenset(revision.circuit_breakers),
+            suppressed_methods=frozenset(revision.suppressed_methods),
+            retry_strategies=dict(revision.retry_strategies),
+            routing_overrides=dict(revision.routing_overrides),
+            holdouts=dict(revision.holdouts),
+            author='system:recovery',
+            reason=f"{reason} (from r{revision.revision} by {revision.author})",
+        )
 
     # ── Writing ──────────────────────────────────────────────────────────────
 
