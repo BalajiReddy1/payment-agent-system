@@ -272,11 +272,13 @@ payment-agent-system/
 │   │   ├── experiment.py         # Concurrent holdout experiments
 │   │   └── memory.py             # Incident recall by structured similarity
 │   ├── control/
-│   │   └── plane.py              # Versioned policy document (the agent's only output)
+│   │   ├── plane.py              # Versioned policy document (the agent's only output)
+│   │   └── publish.py            # Publishes the policy; PolicyClient reads it
 │   ├── store/
 │   │   └── journal.py            # Append-only decision journal (SQLite)
 │   ├── traffic/
-│   │   └── source.py             # TrafficSource interface + journal replay
+│   │   ├── source.py             # TrafficSource interface + journal replay
+│   │   └── gateway.py            # Real PSP adapters (Razorpay, Stripe)
 │   ├── models/
 │   │   └── state.py              # Agent state, memory, data models & authorization tiers
 │   ├── safety/
@@ -305,7 +307,7 @@ payment-agent-system/
 │   ├── agent_config.yaml         # Agent behavior thresholds
 │   ├── safety_rules.yaml         # Safety guardrail configuration
 │   └── simulation_config.yaml    # Simulator parameters
-├── tests/                        # pytest suite (193 tests)
+├── tests/                        # pytest suite (267 tests)
 ├── data/
 │   ├── sample_payments.json      # Sample transaction data
 │   └── sample_payments.csv       # CSV format
@@ -363,6 +365,56 @@ uvicorn api.main:app --reload
 # Streamlit dashboard (superseded by the console)
 streamlit run dashboard/app.py
 ```
+
+### Connecting it to something real
+
+Two seams, and nothing else, separate the demo from a deployment.
+
+**Real traffic in.** `PaymentGatewaySource` reads a live PSP:
+
+```python
+from src.traffic.gateway import HttpTransport, PaymentGatewaySource
+
+source = PaymentGatewaySource(
+    HttpTransport('https://api.razorpay.com', KEY_ID, KEY_SECRET),
+    provider='razorpay',        # or 'stripe'
+    merchant_id='acme',
+)
+agent.process_batch(source.next_batch(200))
+```
+
+A gateway cannot supply every signal the simulator can — a list-payments API
+does not report how long the processor took. The source says so through
+`signals()` rather than inventing a number, because a fabricated latency is
+indistinguishable from a real one downstream and the agent would end up
+measuring improvements in noise it generated itself. Supply the real thing with
+`WebhookLatency` if you receive webhooks.
+
+**Real decisions out.** The agent writes each revision to `control_plane.publish_path`;
+your checkout service reads it. The agent never calls your payment service, so
+an outage on either side degrades to "the last known policy stays in force":
+
+```python
+from src.control.publish import PolicyClient
+
+policy = PolicyClient('data/policy.json')
+
+def route(issuer, method):
+    policy.refresh()
+    if policy.is_broken(issuer):
+        return fallback_for(issuer)
+    if policy.is_suppressed(method):
+        return None
+    return apply(policy.routing_override(issuer))
+```
+
+`PolicyClient` keeps the last good policy when a read fails — a parse error is
+not evidence that no interventions are in force — and exposes `stale` so a dead
+agent is distinguishable from a quiet one.
+
+Honouring `holdout_fraction()` is what makes the measurement real rather than
+self-reported: the control group has to exist in the system actually routing
+payments.
 
 ### Running the tests
 

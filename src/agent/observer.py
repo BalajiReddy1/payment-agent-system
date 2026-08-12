@@ -15,6 +15,21 @@ from src.models.state import (
 from src.utils.stats import mean, percentile
 
 
+def to_local_naive(timestamp: datetime) -> datetime:
+    """
+    Put a timestamp on the same footing as datetime.now().
+
+    Naive timestamps pass through untouched; aware ones are converted to local
+    time and stripped. Dropping the offset without converting would be worse
+    than the crash it replaces - an IST payment would be filed eleven and a
+    half hours out of place, and the sliding window would quietly hold the
+    wrong transactions instead of raising.
+    """
+    if timestamp.tzinfo is None:
+        return timestamp
+    return timestamp.astimezone().replace(tzinfo=None)
+
+
 class PaymentObserver:
     """
     Observes payment transaction streams and maintains real-time statistics.
@@ -64,6 +79,15 @@ class PaymentObserver:
         Args:
             transaction: PaymentTransaction object
         """
+        # The system's clock is naive local time throughout - the sliding
+        # window is arithmetic against datetime.now(). Every real payment
+        # gateway reports UTC-aware timestamps, so the first transaction from
+        # one used to raise TypeError comparing aware to naive, several frames
+        # deep in window eviction. Normalising here, at the boundary where
+        # transactions enter the system, is the only place that fixes it for
+        # every source at once.
+        transaction.timestamp = to_local_naive(transaction.timestamp)
+
         # Add to memory
         self.memory.add_transaction(transaction)
 

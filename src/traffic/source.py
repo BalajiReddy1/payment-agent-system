@@ -12,14 +12,28 @@ Three implementations are useful:
 - JournalReplaySource - replays transactions recorded by a previous run, so a
   past incident can be re-run against changed agent code. This is what turns
   "the agent handled it well" from an assertion into a measurement.
-- A gateway adapter - a real PSP sandbox (Stripe, Razorpay) driven by test
-  credentials, producing genuine decline codes, latencies and webhooks. Not
-  included here because it needs credentials and network access, but it fits
-  this interface without the agent changing.
+- PaymentGatewaySource (src/traffic/gateway.py) - a real PSP, Razorpay or
+  Stripe, producing genuine decline codes and issuer attribution.
+
+This docstring used to say a gateway adapter "fits this interface without the
+agent changing", as an untested claim. Building it found the one place that was
+false: every real gateway reports UTC-aware timestamps and the observer's
+window is naive local time, so the first real transaction raised TypeError deep
+inside window eviction. The fix is in PaymentObserver.ingest_transaction, and
+the lesson is in `signals()` below.
 
 A note on honesty: synthetic traffic is not a weakness of this design as long
 as the *control plane* is real. What makes the loop meaningful is that the
-agent's decisions change what happens next, not where the bytes came from.
+agent's decisions change what happens next, not where the bytes came from - and
+src/control/publish.py is what lets a system outside this process read those
+decisions and act on them.
+
+A second note, on what a source cannot do. Sources differ in which signals they
+can supply: the simulator has every field, a gateway's list-payments API has no
+latency at all. A source reports this through `signals()` rather than filling
+the gap with a plausible number, because a fabricated latency is
+indistinguishable from a real one downstream - the agent would detect, act on,
+and then measure improvements in noise it generated itself.
 """
 
 from datetime import datetime

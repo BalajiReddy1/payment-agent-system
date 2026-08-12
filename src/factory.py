@@ -91,6 +91,27 @@ def build_agent(
     return agent
 
 
+def build_publisher(settings: Optional[Settings] = None):
+    """
+    Construct the control plane publisher, or None if publishing is disabled.
+
+    Separate from build_agent because publishing is a deployment concern, not
+    an agent one: the agent's job is to decide, and whether anyone outside this
+    process is listening does not change a single decision it makes.
+    """
+    settings = settings or build_settings()
+    if not settings.publish.path:
+        return None
+
+    from src.control.publish import PolicyPublisher
+
+    logger.info("Publishing control plane to %s", settings.publish.path)
+    return PolicyPublisher(
+        settings.publish.path,
+        refresh_seconds=settings.publish.refresh_seconds,
+    )
+
+
 def _advisor_for(settings: Settings):
     """
     Resolve the incident advisor, or None.

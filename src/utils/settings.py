@@ -100,6 +100,20 @@ class SimulationSettings:
 
 
 @dataclass
+class PublishSettings:
+    """
+    Where the control plane is published for other systems to read.
+
+    This is the integration surface: the agent writes revisions here and a real
+    checkout service reads them. Empty means do not publish, which is the right
+    default for a demo and the wrong one for a deployment.
+    """
+
+    path: str = ""
+    refresh_seconds: float = 30.0
+
+
+@dataclass
 class AdvisorSettings:
     """
     The slow lane of the two-lane brain.
@@ -126,6 +140,7 @@ class Settings:
     rollback: RollbackSettings = field(default_factory=RollbackSettings)
     simulation: SimulationSettings = field(default_factory=SimulationSettings)
     advisor: AdvisorSettings = field(default_factory=AdvisorSettings)
+    publish: PublishSettings = field(default_factory=PublishSettings)
 
     # Safety limits are described by SafetyLimits itself; kept as a plain dict
     # here so this module does not import the safety package.
@@ -208,6 +223,11 @@ class Settings:
             'model': get_config_value(config, 'advisor.model'),
             'temperature': get_config_value(config, 'advisor.temperature'),
             'max_chars': get_config_value(config, 'advisor.max_chars'),
+        })
+
+        _assign(self.publish, {
+            'path': get_config_value(config, 'control_plane.publish_path'),
+            'refresh_seconds': get_config_value(config, 'control_plane.refresh_seconds'),
         })
 
         weights = config.get('decision_weights')

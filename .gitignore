@@ -41,3 +41,6 @@ build/
 
 # Test artefacts
 .pytest_cache/
+
+# Published control plane — runtime output, rewritten every cycle
+data/policy.json

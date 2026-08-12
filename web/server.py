@@ -24,7 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src import views  # noqa: E402
-from src.factory import build_system  # noqa: E402
+from src.factory import build_publisher, build_system  # noqa: E402
 
 WEB_ROOT = Path(__file__).resolve().parent
 
@@ -46,6 +46,12 @@ class AgentRunner:
             window_size_minutes=5,
             outcome_evaluation_seconds=20,
         )
+
+        # Publishing is what makes the control plane readable outside this
+        # process. The console does not need it - it holds the agent in memory
+        # - but running it here means the integration surface is exercised on
+        # every demo rather than only in its tests.
+        self.publisher = build_publisher(self.settings)
 
         self.history = []
         self.events = []
@@ -71,9 +77,30 @@ class AgentRunner:
                 self.simulator.cleanup_expired_scenarios()
                 results = self.agent.run_cycle()
                 self._record(results)
+                self._publish()
             except Exception as exc:  # a viewer must not be able to kill the agent
                 self._emit('error', {'message': str(exc)})
             self._stop.wait(self.cycle_seconds)
+
+    def _publish(self):
+        """
+        Write the policy where another process can read it.
+
+        A publish failure is reported and swallowed. The agent's mitigations
+        are already in force in its own control plane; losing the ability to
+        tell an external reader about them is a degradation, not a reason to
+        stop mitigating.
+        """
+        if self.publisher is None:
+            return
+        try:
+            if self.publisher.publish(self.agent.state.control_plane):
+                self._emit('published', {
+                    'revision': self.agent.state.control_plane.revision,
+                    'path': str(self.publisher.path),
+                })
+        except OSError as exc:
+            self._emit('error', {'message': f'policy publish failed: {exc}'})
 
     def _record(self, results):
         summary = results.get('observation_summary', {})

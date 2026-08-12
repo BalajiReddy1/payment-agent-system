@@ -64,6 +64,23 @@ decision_weights:
   cost: 0.20
   risk: 0.15
 
+# Control Plane Publishing
+#
+# The integration surface. The agent writes each revision here; a real checkout
+# service reads it and routes accordingly. That is the whole contract - the
+# agent never calls the payment service, so an outage on either side degrades
+# to "the last known policy stays in force" rather than to inconsistency.
+#
+# Readers use src/control/publish.py:PolicyClient, which keeps the last good
+# policy when a read fails. Set publish_path to empty to disable.
+control_plane:
+  publish_path: data/policy.json
+
+  # How often the document is rewritten even when nothing changed. A reader
+  # treats a document older than three of these as stale, so a crashed agent
+  # is distinguishable from a quiet one.
+  refresh_seconds: 30
+
 # Incident Advisor (the slow lane)
 #
 # The deterministic lane detects, scores and acts on its own; the advisor is

@@ -95,3 +95,65 @@ def test_success_rate_reflects_only_current_window():
         observer.ingest_transaction(make_transaction(status=PaymentStatus.SUCCESS))
 
     assert observer.get_success_rate('overall', 'current') == 1.0
+
+
+# ── Timezone-aware sources ───────────────────────────────────────────────────
+#
+# The window is arithmetic against datetime.now(), which is naive local time.
+# Every real payment gateway reports UTC-aware timestamps, so the first
+# transaction from one used to raise TypeError several frames deep in window
+# eviction - which meant "a real PSP adapter fits this interface without the
+# agent changing" was not true until it was tested.
+
+def test_an_aware_timestamp_does_not_break_window_eviction():
+    from datetime import datetime, timezone
+
+    observer = PaymentObserver(window_size_minutes=10)
+    transaction = make_transaction()
+    transaction.timestamp = datetime.now(timezone.utc)
+
+    observer.ingest_transaction(transaction)  # used to raise TypeError
+
+    assert observer.get_summary()['total_transactions'] == 1
+
+
+def test_aware_and_naive_transactions_can_share_a_window():
+    """Mixed sources are the realistic case: a gateway alongside a replay."""
+    from datetime import datetime, timezone
+
+    observer = PaymentObserver(window_size_minutes=10)
+
+    aware = make_transaction()
+    aware.timestamp = datetime.now(timezone.utc)
+    observer.ingest_transaction(aware)
+    observer.ingest_transaction(make_transaction())
+
+    assert observer.get_summary()['total_transactions'] == 2
+
+
+def test_an_aware_timestamp_is_converted_rather_than_stripped():
+    """
+    Dropping the offset would be worse than the crash it replaces: the
+    transaction would be filed hours out of place and the window would quietly
+    hold the wrong rows instead of raising.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from src.agent.observer import to_local_naive
+
+    instant = datetime.now(timezone.utc)
+    india = instant.astimezone(timezone(timedelta(hours=5, minutes=30)))
+    utc = instant.astimezone(timezone.utc)
+
+    # Same instant, two offsets - both must land on the same local time
+    assert to_local_naive(india) == to_local_naive(utc)
+    assert abs((to_local_naive(utc) - datetime.now()).total_seconds()) < 5
+
+
+def test_a_naive_timestamp_is_left_alone():
+    from datetime import datetime
+
+    from src.agent.observer import to_local_naive
+
+    naive = datetime(2026, 6, 1, 12, 0)
+    assert to_local_naive(naive) is naive
