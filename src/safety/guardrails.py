@@ -52,9 +52,11 @@ class SafetyGuardrails:
     """
     Enforces safety constraints on agent actions.
 
-    Implements the problem statement requirement: "define ethical and
-    operational boundaries - what the agent is allowed to change autonomously,
-    when human approval is required".
+    Draws the operational boundary: what the agent may change on its own, what
+    needs a named human, and how much traffic any single decision is allowed to
+    affect. An autonomous system touching live payment routing needs that line
+    drawn in code rather than in a runbook, because the runbook is not what
+    executes at 3am.
     """
 
     def __init__(self, limits: Optional[SafetyLimits] = None):

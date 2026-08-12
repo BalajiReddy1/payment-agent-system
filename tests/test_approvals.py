@@ -236,13 +236,13 @@ def test_operator_approval_executes_the_action():
     assert pending
 
     request = pending[0]
-    ok, message = agent.approve(request.request_id, 'aryan@fintech.com')
+    ok, message = agent.approve(request.request_id, 'ops@example.com')
 
     assert ok, message
     assert 'SBI' in agent.state.active_circuit_breakers
     # The control plane records who authorised it, not just that it happened
     revision = agent.state.control_plane.current
-    assert revision.author == 'operator:aryan@fintech.com'
+    assert revision.author == 'operator:ops@example.com'
 
 
 def test_operator_denial_leaves_the_system_untouched():
@@ -257,7 +257,7 @@ def test_operator_denial_leaves_the_system_untouched():
     request = agent.approvals.pending()[0]
     before = agent.state.control_plane.revision
 
-    agent.deny(request.request_id, 'aryan@fintech.com', note='prefer to wait')
+    agent.deny(request.request_id, 'ops@example.com', note='prefer to wait')
 
     assert 'SBI' not in agent.state.active_circuit_breakers
     assert agent.state.control_plane.revision == before
@@ -308,9 +308,9 @@ def test_operator_approval_is_attributed_to_the_operator():
         agent.run_cycle()
 
     request = agent.approvals.pending()[0]
-    agent.approve(request.request_id, 'aryan@fintech.com')
+    agent.approve(request.request_id, 'ops@example.com')
 
-    assert agent.state.control_plane.current.author == 'operator:aryan@fintech.com'
+    assert agent.state.control_plane.current.author == 'operator:ops@example.com'
 
 
 def test_interventions_are_not_buried_by_alerts_in_the_log():

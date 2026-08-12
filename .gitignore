@@ -44,3 +44,6 @@ build/
 
 # Published control plane — runtime output, rewritten every cycle
 data/policy.json
+
+# Agent tooling scaffolding — not project code
+.claude/skills/

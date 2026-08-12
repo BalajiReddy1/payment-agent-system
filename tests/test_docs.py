@@ -200,3 +200,57 @@ def test_no_document_quotes_unmeasured_accuracy_figures():
         for pattern in banned:
             match = re.search(pattern, body, re.IGNORECASE)
             assert not match, f"{name} quotes an unmeasured figure: {match.group(0)}"
+
+
+# ── This is a personal project, not a competition entry ──────────────────────
+
+def test_no_competition_framing_survives():
+    """
+    The repo grew out of a brief written as a contest problem, and the framing
+    had settled into the README, a guardrails docstring, the brief itself, and
+    even the example approver in the approval tests. It is one person's
+    project; documentation that reads like an answer to someone else's prompt
+    describes the wrong thing.
+    """
+    import subprocess
+
+    tracked = subprocess.run(
+        ['git', 'ls-files'], cwd=ROOT, capture_output=True, text=True
+    ).stdout.split()
+
+    banned = ('hackathon', 'problem statement', 'participants must',
+              'teams should', 'submission deadline', 'judging')
+
+    offenders = []
+    for name in tracked:
+        path = ROOT / name
+        if not path.is_file() or path.suffix in ('.png', '.db', '.ico'):
+            continue
+        if name.startswith('tests/test_docs.py'):
+            continue  # this file names the terms in order to ban them
+        try:
+            body = path.read_text(errors='ignore').lower()
+        except OSError:
+            continue
+        for term in banned:
+            if term in body:
+                offenders.append(f"{name}: {term}")
+
+    assert not offenders, offenders
+
+
+def test_agent_tooling_is_not_committed_to_the_repo():
+    """
+    2.1 MB of UI-skill scaffolding got committed while building the console.
+    It is tooling for the assistant, not code for the project, and it has no
+    business in someone's own repository.
+    """
+    import subprocess
+
+    tracked = subprocess.run(
+        ['git', 'ls-files', '.claude'], cwd=ROOT, capture_output=True, text=True
+    ).stdout.split()
+
+    assert not [p for p in tracked if p.startswith('.claude/skills/')], (
+        'agent tooling data is tracked in git'
+    )

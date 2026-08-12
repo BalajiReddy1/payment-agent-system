@@ -1,21 +1,39 @@
 # 🏦 Agentic AI for Smart Payment Operations
 
-An intelligent, autonomous payment operations system that monitors real-time payment transactions, detects failure patterns, reasons about root causes, and executes corrective interventions — powered by **Google Gemini 2.5 Flash** with native function-calling and a full **Model Context Protocol (MCP)** tool layer.
+An autonomous payment operations agent. It watches live payment traffic,
+detects failure patterns statistically, decides whether intervening is worth
+it, changes routing policy through a versioned control plane, and measures
+whether its own actions actually helped.
 
 ---
 
-## 🎯 Problem Statement
+## Why this exists
 
-Payment failures cost fintech companies millions in lost revenue. Traditional rule-based systems react too slowly and can't handle the complexity of modern payment ecosystems with hundreds of banks, issuers, payment methods, and failure modes.
+Payment failures are found late. A dashboard spikes, or a merchant complains,
+and by then the revenue is gone. The failure modes are varied enough — issuer
+downtime, throttling, retry storms, method fatigue, latency — that a rules
+engine either fires constantly or misses everything.
 
-This **agentic AI system** acts as a real-time payment operations manager that:
-- ✅ Continuously observes payment signals across issuers, methods, and geographies
-- ✅ Reasons about emerging patterns with hypothesis generation
-- ✅ Deploys a **Gemini 2.5 Flash** LLM brain for autonomous decision-making
-- ✅ Executes real-time interventions via native function-calling
-- ✅ Maintains safety guardrails with 3-tier authorization and auto-rollback
-- ✅ Learns from outcomes to improve future decisions
-- ✅ Explains every decision with full audit trail
+What this does instead:
+
+- **Detects statistically, not by threshold.** Log-likelihood-ratio CUSUM plus
+  Bayesian rate estimates, so a detection carries a false-alarm rate that was
+  measured rather than guessed.
+- **Scores every option, including doing nothing.** The decision trace shows
+  the alternatives that lost, not just the winner.
+- **Changes policy through one versioned document.** Every intervention is an
+  attributed revision to a control plane, so rollback is derived by diffing
+  revisions rather than hand-written per action type.
+- **Measures its own effect against a concurrent holdout.** A slice of affected
+  traffic is deliberately left untreated, because comparing after against
+  before is confounded by the incident resolving on its own.
+- **Knows what it may not do alone.** Three authorization tiers, an approval
+  queue where unanswered requests lapse rather than auto-grant, and an audit
+  trail that never files an agent's decision under a person's name.
+- **Runs the LLM as an advisor, not a decision-maker.** The deterministic lane
+  decides and acts; a model is asked once per incident to explain the situation
+  to whoever is on call, and it is given no tools. The whole system runs
+  without it.
 
 ---
 
