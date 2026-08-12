@@ -207,7 +207,14 @@ class PaymentReasoner:
         
         if retry_percentage >= self.thresholds['retry_storm']:
             severity = min(retry_percentage / 0.6, 1.0)
-            confidence = self._calculate_confidence(total_txns, retry_percentage - 0.2)
+            # Effect size is how far past the threshold we are, measured from
+            # the configured threshold rather than a hardcoded 0.2. With the
+            # shipped config (0.15) that constant was above the trigger point,
+            # so every retry storm between 15% and 20% produced a negative
+            # effect size - the exact input that crashed the phase.
+            confidence = self._calculate_confidence(
+                total_txns, retry_percentage - self.thresholds['retry_storm']
+            )
             
             pattern = Pattern(
                 pattern_id='',
@@ -408,8 +415,15 @@ class PaymentReasoner:
         # Sample size factor (sigmoid function)
         size_confidence = 1 / (1 + math.exp(-0.05 * (sample_size - 50)))
 
-        # Effect size factor (linear with saturation)
-        effect_confidence = min(effect_size / 0.3, 1.0)
+        # Effect size factor (linear with saturation).
+        #
+        # Clamped at zero, not merely capped at one. A negative effect size
+        # reached the geometric mean below and raised ValueError from
+        # math.sqrt - which aborted the entire REASON phase, so a simultaneous
+        # issuer degradation went undetected while the agent logged a domain
+        # error nobody was reading. An effect pointing the wrong way means no
+        # confidence in the detection, which is a number, not a crash.
+        effect_confidence = min(max(effect_size / 0.3, 0.0), 1.0)
 
         # Combined confidence (geometric mean)
         confidence = math.sqrt(size_confidence * effect_confidence)

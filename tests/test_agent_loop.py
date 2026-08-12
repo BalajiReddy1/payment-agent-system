@@ -6,13 +6,26 @@ must actually be counted, alerts must not be filed as interventions, and the
 learn phase must receive outcomes rather than sitting permanently empty.
 """
 
+import random
 from datetime import datetime
 
 from src.agent.core import PaymentAgent
 from src.simulation.payment_simulator import PaymentSimulator
 
 
-def run_agent(cycles=5, outcome_evaluation_seconds=0, severity=0.85, count=250):
+def run_agent(cycles=5, outcome_evaluation_seconds=0, severity=0.85, count=250,
+              seed=None):
+    """
+    Drive the loop against a degrading issuer.
+
+    `seed` fixes the simulator's draw. Tests asserting on counts that come out
+    small need it: the traffic is random and a test whose margin is one
+    observation is a coin flip dressed as an assertion, failing a few percent
+    of runs depending on what consumed the global RNG before it.
+    """
+    if seed is not None:
+        random.seed(seed)
+
     agent = PaymentAgent(
         window_size_minutes=5,
         outcome_evaluation_seconds=outcome_evaluation_seconds,
@@ -56,8 +69,17 @@ def test_alerts_are_raised_for_severe_patterns():
 
 
 def test_learn_phase_records_outcomes():
-    # Enough traffic for both experiment arms to clear the minimum sample size
-    agent, _results = run_agent(cycles=8, count=500, outcome_evaluation_seconds=0)
+    """
+    Enough traffic for both experiment arms to clear the minimum sample size.
+
+    Seeded deliberately. Unseeded this produced exactly one outcome, so
+    "> 0" had a margin of one observation and failed about 8% of runs
+    depending on what had consumed the global RNG first - a flake that would
+    read as a real regression to whoever next changed the learn phase.
+    """
+    agent, _results = run_agent(
+        cycles=12, count=500, outcome_evaluation_seconds=0, seed=20260812
+    )
 
     summary = agent.get_status()['learning_summary']
     assert summary['total_outcomes_recorded'] > 0
@@ -99,3 +121,98 @@ def test_refused_action_falls_through_to_next_candidate():
 
     # The agent asked for what it could not do alone rather than staying silent
     assert agent.approvals.requests, "the agent should have requested approval"
+
+
+# ── The REASON phase must not be abortable by one detector ───────────────────
+
+def test_a_marginal_retry_storm_does_not_abort_pattern_detection():
+    """
+    Found by running the demo the docs tell a reader to run.
+
+    The retry-storm detector computed its effect size as
+    `retry_percentage - 0.2` while the shipped config triggers at 0.15, so any
+    storm between 15% and 20% produced a negative effect size, reached
+    math.sqrt, and raised ValueError. run_cycle caught it - which is worse than
+    it sounds: the whole REASON phase aborted, so a simultaneous issuer
+    degradation went undetected while a domain error nobody reads went to the
+    log.
+    """
+    from src.agent.reasoner import PaymentReasoner
+    from src.factory import build_agent, build_simulator
+
+    agent = build_agent(window_size_minutes=60, advisor=None)
+    agent.reasoner.thresholds['retry_storm'] = 0.15
+    simulator = build_simulator(control_plane=agent.state)
+
+    # 17% retries: past the trigger, inside the window that used to crash
+    batch = simulator.generate_stream(count=200, start_time=datetime.now())
+    for i, txn in enumerate(batch):
+        txn.is_retry = i < 34
+    agent.process_batch(batch)
+
+    results = agent.run_cycle()
+
+    assert 'error' not in results, results.get('error')
+
+    # Whether it is *reported* is a separate question, and the right answer is
+    # no: two points past the threshold is a weak effect, so confidence lands
+    # under the reporting floor. Triggering evaluation and clearing the bar to
+    # be shown are deliberately different bars.
+    assert not any(p['type'] == 'retry_storm' for p in results['patterns_detected'])
+
+
+def test_a_clear_retry_storm_is_still_detected():
+    """The clamp must not have muted the detector it was protecting."""
+    from src.factory import build_agent, build_simulator
+
+    agent = build_agent(window_size_minutes=60, advisor=None)
+    agent.reasoner.thresholds['retry_storm'] = 0.15
+    simulator = build_simulator(control_plane=agent.state)
+
+    batch = simulator.generate_stream(count=200, start_time=datetime.now())
+    for i, txn in enumerate(batch):
+        txn.is_retry = i < 90  # 45%
+    agent.process_batch(batch)
+
+    results = agent.run_cycle()
+
+    assert 'error' not in results
+    assert any(p['type'] == 'retry_storm' for p in results['patterns_detected'])
+
+
+def test_confidence_survives_an_effect_pointing_the_wrong_way():
+    """An effect in the wrong direction means no confidence, not a crash."""
+    from src.agent.reasoner import PaymentReasoner
+
+    reasoner = PaymentReasoner()
+
+    assert reasoner._calculate_confidence(500, -0.5) == 0.0
+    assert reasoner._calculate_confidence(500, 0.0) == 0.0
+    assert 0.0 < reasoner._calculate_confidence(500, 0.15) <= 1.0
+    assert reasoner._calculate_confidence(500, 10.0) <= 1.0
+
+
+def test_every_detector_still_runs_when_one_finds_nothing():
+    """
+    The property the crash violated: detectors are independent, and one
+    declining to fire - or failing - must not cost the others their cycle.
+    """
+    from src.factory import build_agent, build_simulator
+
+    agent = build_agent(window_size_minutes=60, advisor=None)
+    agent.reasoner.thresholds['retry_storm'] = 0.15
+    simulator = build_simulator(control_plane=agent.state)
+    simulator.inject_issuer_degradation('SBI', severity=0.9, duration_seconds=3600)
+
+    batch = simulator.generate_stream(count=400, start_time=datetime.now())
+    for i, txn in enumerate(batch):
+        txn.is_retry = i < 68  # 17%, the crashing band
+    agent.process_batch(batch)
+
+    results = agent.run_cycle()
+    kinds = {p['type'] for p in results['patterns_detected']}
+
+    assert 'error' not in results
+    assert 'issuer_degradation' in kinds, (
+        f"the degradation must be found alongside the retry storm; saw {kinds}"
+    )

@@ -1,444 +1,320 @@
-# Payment Agent System - Technical Documentation
+# Architecture
 
-## Architecture Overview
+How the system is put together, and why each part is the shape it is. Where a
+number appears here it is measured — by a test in `tests/`, or by
+`python -m src.utils.benchmark` — and the place it is measured is named.
 
-The Payment Agent System implements a complete autonomous agent loop for real-time payment operations management. This document explains the technical architecture, decision-making process, and implementation details.
-
-## Core Agent Loop
+## The shape of the thing
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                   AGENT LOOP                         │
-│                                                      │
-│  OBSERVE → REASON → DECIDE → ACT → LEARN → OBSERVE  │
-└──────────────────────────────────────────────────────┘
+      traffic source                                    control plane
+   ┌──────────────────┐                            ┌──────────────────────┐
+   │ simulator        │                            │ versioned, append-   │
+   │ gateway (PSP)    │──── transactions ────▶     │ only policy document │
+   │ journal replay   │                            └──────────┬───────────┘
+   └──────────────────┘                                       │
+            ▲                                                 │ published
+            │                                                 ▼
+            │                              ┌──────────────────────────────┐
+            └────────── reads the ─────────│  data/policy.json            │
+                        policy             │  read by your checkout       │
+                                           │  service (PolicyClient)      │
+                                           └──────────────────────────────┘
+
+   OBSERVE ──▶ REASON ──▶ DECIDE ──▶ ACT ──▶ LEARN
+      │           │          │         │        │
+      │           │          │         │        └─ outcomes, weighted by
+      │           │          │         │           whether they were measured
+      │           │          │         └─ guardrails, authorization tiers,
+      │           │          │            approval queue, holdout assignment
+      │           │          └─ every alternative scored, not only the winner
+      │           └─ statistical detection: CUSUM, Bayesian rate estimates
+      └─ sliding window, per-dimension accounting
 ```
 
-### 1. OBSERVE Phase (observer.py)
-
-**Purpose**: Ingest and preprocess payment transaction data in real-time.
-
-**Key Components**:
-- **Sliding Window**: Maintains last N minutes of transactions
-- **Real-time Statistics**: Calculates success rates, latencies, volumes across multiple dimensions:
-  - Overall metrics
-  - By issuer (bank/payment processor)
-  - By payment method (credit card, UPI, etc.)
-  - By region (geographic)
-  - By merchant
-
-**Implementation Highlights**:
-```python
-class PaymentObserver:
-    def ingest_transaction(self, transaction):
-        # Add to sliding window
-        self.transactions_window.append(transaction)
-        
-        # Update statistics across all dimensions
-        self._update_stats(transaction)
-        
-        # Track latency and errors
-        self._track_latency(transaction)
-```
-
-**Metrics Tracked**:
-- Success/failure rates
-- Latency (p50, p95, p99)
-- Transaction volumes
-- Retry efficiency
-- Error code frequencies
-
-### 2. REASON Phase (reasoner.py)
-
-**Purpose**: Detect meaningful patterns and form hypotheses about root causes.
-
-**Pattern Detection**:
-
-The reasoner implements multiple pattern detectors, each looking for specific failure modes:
-
-1. **Issuer Degradation Detector**
-   - Compares current issuer success rate to baseline
-   - Triggers when degradation > threshold (default 15%)
-   - Considers transaction volume to avoid false positives
-
-2. **Retry Storm Detector**
-   - Monitors percentage of traffic that is retries
-   - Checks retry efficiency (how many retries succeed)
-   - Triggers when retry % > 40% or efficiency < 30%
-
-3. **Method Fatigue Detector**
-   - Detects when payment methods perform poorly after retries
-   - Indicates potential fraud detection triggers or user frustration
-
-4. **Latency Spike Detector**
-   - Monitors p95 latency against baseline
-   - Triggers when latency > 1.5x baseline
-
-5. **Error Cluster Detector**
-   - Identifies when specific errors occur frequently
-   - Helps pinpoint systematic issues
-
-6. **Geographic Failure Detector**
-   - Detects region-specific problems
-   - Compares regional performance to overall
-
-**Hypothesis Generation**:
-
-For each pattern, the reasoner generates plausible root cause hypotheses with probabilities:
-
-```python
-def generate_hypotheses(self, pattern: Pattern) -> List[Hypothesis]:
-    if pattern.pattern_type == 'issuer_degradation':
-        return [
-            Hypothesis(root_cause='issuer_down', probability=0.6),
-            Hypothesis(root_cause='issuer_throttling', probability=0.3),
-            Hypothesis(root_cause='network_issue', probability=0.1)
-        ]
-```
-
-**Confidence Scoring**:
-
-Confidence is calculated based on:
-- Sample size (larger samples = higher confidence)
-- Effect size (stronger effects = higher confidence)
-- Using sigmoid function for sample size and linear saturation for effect
-
-```python
-confidence = sqrt(size_confidence * effect_confidence)
-```
-
-### 3. DECIDE Phase (decision_maker.py)
-
-**Purpose**: Choose the best action given patterns, hypotheses, and constraints.
-
-**Multi-Objective Optimization**:
-
-The decision maker balances four objectives:
-- **Success Rate** (40% weight): Maximize payment success
-- **Latency** (25% weight): Minimize transaction latency
-- **Cost** (20% weight): Minimize processing costs
-- **Risk** (15% weight): Minimize intervention risk
-
-**Decision Process**:
-
-```python
-def decide(self, context: DecisionContext):
-    # 1. Generate possible actions for the pattern
-    possible_actions = self._generate_actions(pattern, context)
-    
-    # 2. Evaluate each action on all objectives
-    for action in possible_actions:
-        score = (
-            weights['success_rate'] * score_success(action) +
-            weights['latency'] * score_latency(action) +
-            weights['cost'] * score_cost(action) +
-            weights['risk'] * score_risk(action)
-        ) * action.confidence
-    
-    # 3. Select highest-scoring action
-    best_action = max(evaluated_actions, key=lambda x: x.score)
-    
-    # 4. Check safety constraints
-    if state.can_take_action(best_action):
-        return best_action
-```
-
-**Action Types**:
-
-| Action | Risk | Authorization | Typical Impact |
-|--------|------|---------------|----------------|
-| Adjust Retry | Low | Automatic | +5% success, -50ms latency |
-| Circuit Breaker | Medium | Automatic | +15% success, -100ms latency |
-| Route Change | Medium | Semi-auto | +10% success, +50ms latency |
-| Method Suppress | High | Manual | Variable |
-| Alert Ops | Low | Automatic | N/A |
-
-**Trade-off Example**:
-
-For an issuer degradation pattern:
-- **Circuit Breaker**: High success improvement (+15%), low latency (-200ms), medium cost (+$0.02/txn)
-- **Route Change**: Medium success improvement (+8%), slight latency increase (+20ms), low cost (+$0.01/txn)
-
-Decision: Circuit breaker wins due to much higher success improvement despite higher cost.
-
-### 4. ACT Phase (executor.py)
-
-**Purpose**: Execute actions safely with guardrails and monitoring.
-
-**Safety Guardrails**:
-
-```python
-SAFETY_CONSTRAINTS = {
-    'max_actions_per_hour': 50,
-    'max_rollbacks_per_hour': 10,
-    'impact_limits': {
-        'low_risk': 0.05,      # 5% of traffic
-        'medium_risk': 0.10,   # 10% of traffic
-        'high_risk': 0.20,     # 20% of traffic
-        'critical_risk': 1.00  # 100% of traffic
-    }
-}
-```
-
-**Pre-Execution Checks**:
-1. Authorization verification (manual, semi-auto, automatic)
-2. Action rate limits (not too many actions too fast)
-3. Impact limits (action doesn't affect too much traffic)
-4. No conflicting active interventions
-
-**Execution Examples**:
-
-**Circuit Breaker**:
-```python
-def _execute_circuit_breaker(self, action, state):
-    issuer = action.parameters['issuer']
-    state.active_circuit_breakers.add(issuer)
-    # New transactions to this issuer are routed elsewhere
-```
-
-**Retry Adjustment**:
-```python
-def _execute_retry_adjustment(self, action, state):
-    state.retry_strategies[target] = {
-        'max_retries': 2,  # Reduced from 4
-        'backoff_multiplier': 2.0  # Increased
-    }
-```
-
-**Automatic Rollback**:
-
-The executor monitors all active interventions and triggers rollback if:
-- Success rate drops >5% below baseline
-- Latency increases >50% above baseline
-- Error rate increases >10%
-- Action duration expires
-
-```python
-def monitor_and_rollback(self, state, observer):
-    for action in active_interventions:
-        if should_rollback(action, baseline, current):
-            self._rollback_action(action, state)
-```
-
-### 5. LEARN Phase (learner.py)
-
-**Purpose**: Learn from action outcomes to improve future decisions.
-
-**Outcome Recording**:
-
-After each action completes, the learner records:
-- Estimated vs. actual impact
-- Prediction error
-- Baseline and actual metrics
-- Action effectiveness
-
-```python
-def record_outcome(self, action, baseline, actual):
-    outcome = {
-        'estimated_impact': action.estimated_impact,
-        'actual_impact': calculate_actual(baseline, actual),
-        'prediction_error': calculate_error(estimated, actual)
-    }
-    self.action_outcomes[action_key].append(outcome)
-```
-
-**Learning Mechanisms**:
-
-1. **Action Effectiveness Tracking**
-   - Maintains history of all actions and their outcomes
-   - Calculates average improvement per action type
-   - Measures prediction accuracy
-
-2. **Pattern Detection Refinement**
-   - Tracks true positives vs false positives
-   - Adjusts detection thresholds to optimize precision/recall
-
-3. **Decision Weight Adjustment**
-   - Uses simple reinforcement learning
-   - Increases weights for objectives that correlate with success
-   - Updates weights every 10 cycles
-
-```python
-def update_decision_weights(self, decision_maker):
-    for objective, scores in objective_scores.items():
-        avg_score = mean(scores)
-        new_weight = current_weight + learning_rate * (avg_score - 0.5)
-        decision_maker.weights[objective] = clamp(new_weight, 0.05, 0.60)
-    
-    normalize_weights(decision_maker.weights)
-```
-
-**Threshold Recommendations**:
-
-Based on pattern accuracy:
-- If precision < 70%: Increase threshold (fewer detections, fewer false positives)
-- If precision > 95%: Decrease threshold (more detections, catch more issues)
-
-## State Management
-
-**Agent State** (state.py):
-- Current operational metrics
-- Active interventions (circuit breakers, routing overrides, etc.)
-- Safety metrics (actions taken, rollbacks)
-- Performance metrics (patterns detected, actions successful)
-
-**Agent Memory**:
-- Short-term: Recent transactions, active patterns
-- Long-term: Historical patterns, action outcomes
-- Learning memory: Effectiveness scores, reliability metrics
-
-## Simulation System
-
-**Payment Simulator** (payment_simulator.py):
-
-Generates realistic payment streams with:
-- Normal operation (95% success rate baseline)
-- Realistic distributions of payment methods, issuers, regions
-- Log-normal amount distributions
-- Realistic latency (200ms ± 50ms)
-
-**Failure Injection**:
-
-The simulator can inject various failure scenarios:
-
-```python
-simulator.inject_issuer_degradation(
-    issuer='HDFC_BANK',
-    severity=0.6,      # 60% of transactions fail
-    duration_seconds=300
-)
-
-simulator.inject_retry_storm(duration_seconds=180)
-
-simulator.inject_latency_spike(multiplier=3.0, duration_seconds=150)
-```
-
-## Decision Explainability
-
-Every decision includes comprehensive reasoning:
-
-```
-## Pattern Detected
-Type: issuer_degradation
-Severity: 0.75
-Description: Issuer HDFC_BANK showing 18.0% drop in success rate
-Confidence: 0.85
-
-## Hypothesized Root Causes
-- issuer_down (probability: 0.60)
-- issuer_throttling (probability: 0.30)
-- network_issue (probability: 0.10)
-
-## Selected Action
-Type: circuit_breaker
-Target: HDFC_BANK
-Risk Level: medium
-Authorization: automatic
-
-## Expected Impact
-- Success Rate: +15.0% change
-- Latency: -200ms change
-- Cost: $0.020 per transaction
-- Affected Traffic: 8.2%
-
-## Alternatives Considered
-- route_change: score 0.72 (Success: 0.65, Latency: 0.68, Cost: 0.85, Risk: 0.70)
-- no_action: score 0.45 (Success: 0.50, Latency: 1.00, Cost: 1.00, Risk: 1.00)
-```
-
-## Performance Characteristics
-
-**Detection Speed**:
-- Real-time pattern detection (<1 second per cycle)
-- Typically detects issues within 15-30 seconds of onset
-
-**Accuracy**:
-- Pattern detection precision: ~85-95% (after learning)
-- Action prediction accuracy: ~70-80%
-- False positive rate: <10% (after tuning)
-
-**Impact**:
-- Average success rate improvement: 10-20% during incidents
-- Mean time to detect (MTTD): ~30 seconds
-- Mean time to resolve (MTTR): ~2 minutes (vs. hours manually)
-
-## Ethical Considerations
-
-**Fairness**:
-- No use of user demographics in decision-making
-- Interventions applied uniformly based on technical signals only
-- Equal treatment across geographies and payment methods
-
-**Transparency**:
-- All decisions fully explainable
-- Complete audit trail of actions
-- Clear indication when agent has intervened
-
-**Human Oversight**:
-- High-risk actions require human approval
-- Humans can override any decision
-- Regular audits of agent behavior
-- Clear escalation procedures
-
-## Safety Mechanisms
-
-1. **Impact Limits**: Actions cannot affect more than X% of traffic based on risk level
-2. **Rate Limits**: Maximum actions per hour to prevent cascades
-3. **Automatic Rollback**: Immediate reversion if metrics degrade
-4. **Human Override**: Operators can stop or override any action
-5. **Approval Gates**: High-risk changes require manual approval
-
-## Code Organization
+Two structural claims hold the design together.
+
+**The control plane is the agent's only output.** No component reaches into
+payment routing directly. Every intervention is a revision to one versioned,
+attributed document, which means rollback is derived by diffing revisions
+rather than hand-written per action type, and the audit trail is the same
+object as the mechanism.
+
+**The loop is closed.** The traffic source reads the control plane, so an
+intervention changes the transactions the agent subsequently observes. An
+agent whose actions do not affect its own inputs is not an agent; it is a
+report. Measured: open-loop success rate stays around 83% through an issuer
+degradation, closed-loop recovers to ~97% (`tests/test_closed_loop.py`).
+
+## The loop
+
+### OBSERVE — `src/agent/observer.py`
+
+A sliding window with per-dimension counters (issuer, method, region, error
+code) maintained incrementally, plus an ordered outcome stream for sequential
+detection.
+
+Counters are decremented on eviction, not only incremented on arrival. A
+counter that only grows becomes a permanent false positive the moment the
+window moves past whatever caused it — an earlier version leaked 161 phantom
+errors into a window holding 1.
+
+Timestamps are normalised at ingest. The window is arithmetic against
+`datetime.now()`, which is naive local time, while every real payment gateway
+reports UTC-aware timestamps; mixing them raised `TypeError` deep inside
+eviction. Aware timestamps are *converted*, not stripped — discarding the
+offset would file an IST payment eleven and a half hours out of place, and the
+window would quietly hold the wrong rows instead of raising.
+
+### REASON — `src/agent/reasoner.py`, `src/analysis/statistics.py`
+
+Detection is statistical, not threshold-based.
+
+- **Sequential change detection.** A log-likelihood-ratio CUSUM over the
+  outcome stream, threshold `log(1/0.001) = 6.9`. Measured on synthetic
+  Bernoulli streams: ~4% false alarms per 2,000 healthy observations at a 95%
+  baseline; detects a drop to 90% in ~310 transactions, to 80% in ~74, to 50%
+  in ~22. An ad-hoc mean-shift formulation was tried first and could not
+  separate signal from noise at any threshold — 78% false alarms at h=3, still
+  12% at h=8.
+- **Bayesian rate estimation.** Beta-binomial posteriors give
+  `probability_below(rate)` rather than a point estimate crossing a guessed
+  line. The regularised incomplete beta is implemented with a modified Lentz
+  continued fraction against the standard library.
+
+The agent is deliberately conservative here. CUSUM raises the alarm; the
+posterior confirms it before anything is acted on. A payment operations agent
+that cries wolf gets ignored, and an ignored agent is worse than none.
+
+### DECIDE — `src/agent/decision_maker.py`
+
+Multi-objective scoring over success rate, latency, cost and risk, with weights
+that must sum to 1.0 (enforced at startup, not at 3am).
+
+`rank_actions()` returns the whole ranking, so the console can show the
+alternatives that lost. A decision trace showing only the winner is
+indistinguishable from a rules engine.
+
+Doing nothing is scored like anything else, and used to be unbeatable: a zero
+delta scored 1.0 while every real intervention scored below it, so the agent
+reliably chose inaction. The neutral score is now 0.5, and improvements and
+regressions move away from it in proportion to their size.
+
+### ACT — `src/agent/executor.py`, `src/safety/`, `src/analysis/experiment.py`
+
+Three things happen before an action reaches the control plane.
+
+**Authorization.** Every action's tier comes from one map,
+`ACTION_AUTHORIZATION` in `src/models/state.py`, read by every path that can
+create an action: the autonomous loop, the LLM tool layer, the MCP server.
+The tier was previously hardcoded to `AUTOMATIC` on the autonomous path, so a
+circuit breaker ran unattended while the docs and the map both said it needed
+an operator.
+
+**Approval.** An action the agent may not take alone is queued, not skipped.
+Requests **lapse** after 600s rather than being granted — a tier that
+eventually approves itself is a delay, not a control. Repeat proposals dedupe,
+because the agent re-proposes every cycle while an incident continues and an
+operator should see one decision rather than forty copies.
+
+**Holdout assignment.** A fraction of affected traffic (default 10%) is
+deliberately left untreated, assigned deterministically by SHA-256 of the
+transaction id, so the intervention can be measured against a concurrent
+control.
+
+That last one is the expensive decision in this design. It knowingly leaves
+real payments unprotected. It is worth it because the alternative — comparing
+after against before — is confounded by everything else that changed, not least
+the incident resolving on its own. Measured on the same incident: before/after
+attributed +6.5%, the concurrent holdout measured +70.1%.
+
+### LEARN — `src/agent/learner.py`, `src/analysis/memory.py`
+
+Outcomes update decision weights, but only outcomes that were actually
+measured. An outcome attributed by before/after comparison is recorded and
+ignored for learning: feeding a confounded number into the weights teaches the
+agent about the incident's natural recovery, not about its own action.
+
+Scoring is gated on `has_sufficient_data()` — 30 observations per arm. With
+`outcome_evaluation_seconds=0` outcomes were previously recorded in the same
+cycle the action executed, before any traffic had passed through the
+experiment, so every measurement silently fell back to before/after.
+
+**Incident memory** retrieves comparable past incidents by structured feature
+similarity — pattern type (a gate, not a weight), affected dimension, target,
+severity, error signature — rather than embeddings. Only outcomes that were
+both holdout-attributed and statistically significant become advice.
+
+## Statistics that do not overstate
+
+`compare_proportions` reports a two-proportion z-test with an Agresti-Caffo
+interval, clamped to [-1, 1].
+
+The plain Wald interval breaks exactly where a payment incident puts you. A
+control arm failing every transaction has p=0, so its variance term vanishes,
+the interval is computed as though only the treated arm carried uncertainty,
+and it runs off the end of the scale — a live run reported
+`+94.7% (95% CI +87.6% to +101.8%)`, an upper bound describing something that
+cannot happen. Measured coverage of the replacement at the boundary (p=1.00 vs
+0.90, n=40): 98.5% for a nominal 95% interval.
+
+`Experiment.summary()` gates `significant` on `has_sufficient_data()` as well
+as the p-value. Before that, three control transactions rendered as
+"significant" on the console — a stronger claim than the agent itself would act
+on, made to the person deciding whether to trust it.
+
+## The two-lane brain
+
+The deterministic lane detects, scores and acts every cycle in tens of
+milliseconds. The **advisor** (`src/agent/advisors.py`) is asked a narrower
+question — *what should a human understand about this?* — once per **incident**,
+not once per cycle. On one measured run: 12 detections, 1 advisor call.
+
+Two constraints, both enforced rather than documented:
+
+- **Advisors get no tools.** The tool-calling path already runs through the
+  authorization tiers and the approval queue. Giving the advisor those tools
+  would create a second decision path bypassing the ranking, the guardrails and
+  the holdout measurement — an unaudited way to change payment routing, arrived
+  at by a component whose job was to write a sentence. Asserted on the wire in
+  `tests/test_advisors.py`.
+- **The model is optional.** `build_advisor()` returns `None` when none is
+  reachable. No API key, no SDK, or the lane switched off in config all degrade
+  the narrative and never the mitigation.
+
+## Durability and restart
+
+`src/store/journal.py` records transactions, cycles, patterns, actions,
+outcomes and control plane revisions to SQLite. It buys two things.
+
+**Replay.** `JournalReplaySource` re-runs a recorded incident against changed
+agent code, which is what turns "the agent handled it well" from an assertion
+into a measurement.
+
+**Recovery.** On startup with a journal, the agent adopts whatever the previous
+run left in force. Without this, a circuit breaker outlives the process that
+opened it: the published policy still refuses traffic to that issuer, the
+restarted agent has never heard of it, and nothing will ever expire or roll it
+back. The issuer recovers and the breaker stays shut indefinitely.
+
+Adoption publishes a *new* revision rather than rewinding the counter, attributed
+`system:recovery` and carrying the original decision-maker forward in the
+reason. The log is append-only; what happened, happened. An inherited
+intervention is never filed as this agent's own choice, and gets its own panel
+on the console — it has no incident behind it and nothing in the decision
+trace, which is exactly the blind spot that let one survive unnoticed.
+
+## Integration surface
+
+Two seams, and nothing else, separate the demo from a deployment.
+
+**Traffic in** — `src/traffic/gateway.py` maps Razorpay and Stripe onto the
+`TrafficSource` interface. Sources declare what they can supply via
+`signals()`: a gateway's list-payments API does not report processor latency,
+so `latency_ms` stays zero and the signal is marked absent rather than filled
+with a plausible number. A fabricated latency is indistinguishable from a real
+one downstream, and the agent would detect, act on, and then *measure
+improvements in* noise it generated itself.
+
+**Decisions out** — `src/control/publish.py` writes each revision where a real
+checkout service reads it with `PolicyClient`. A document rather than a
+callback: the agent needs no production credentials, and an outage on either
+side degrades to "the last known policy stays in force" rather than to
+inconsistency.
+
+Three properties carry that:
+
+- Writes go through a temp file and `rename`. A reader polling mid-write gets a
+  truncated document, and a truncated policy parses as an empty one — which
+  reads as "nothing is wrong" and would undo every live mitigation.
+- A read failure keeps the last good policy. A parse error is not evidence that
+  no interventions are in force; failing open resumes routing to a dead issuer.
+- Documents carry an expiry and clients expose `stale`, so a crashed agent is
+  distinguishable from a quiet one. A stale policy is still applied — the
+  interventions were real and nothing has said otherwise.
+
+Honouring `holdout_fraction()` in the routing layer is what makes the
+measurement real rather than self-reported: the control group has to exist in
+the system actually routing payments.
+
+## Interfaces
+
+`src/views.py` holds the read models. Both the console (`web/server.py`) and
+the REST API (`api/main.py`) call it, so the two cannot answer differently
+about the same agent — before it existed, the console claimed parity the API
+did not have.
+
+The console is stdlib-only: `http.server` plus SSE, no build step, no
+third-party dependency. The agent core has none either, so the thing you use to
+look at the agent has the same dependency profile as the agent.
+
+## Safety, honestly stated
+
+| Level | Actions | Requires |
+|-------|---------|----------|
+| AUTOMATIC | retry tuning, alerts | nothing |
+| SEMI_AUTOMATIC | circuit breaker, routing | an approver, unless low risk |
+| MANUAL | method suppression | an approver, always |
+
+Alongside the tiers, `SafetyGuardrails` enforces rate limits, a maximum blast
+radius, a concurrency cap and a minimum confidence. Config that fails to
+classify every action type is rejected at startup, so adding a capability
+cannot leave it unclassified and therefore unguarded.
+
+Attribution distinguishes an agent's own auto-approval (`agent:auto_low_risk`)
+from an operator's (`operator:name@example.com`) and from an inherited policy
+(`system:recovery`). Labelling the first as an operator would put a person's
+name against a decision no person made.
+
+## What is not claimed
+
+The traffic in the demo is synthetic. That is a real limitation and it is
+stated rather than dressed up: what makes the loop meaningful is that the
+agent's decisions change what happens next, and that the measurement is a
+concurrent control rather than a before/after comparison. Point it at a gateway
+and the same loop runs unchanged.
+
+There are no accuracy figures for pattern detection precision, recall or
+mean-time-to-detect against real payment traffic, because there is no real
+payment traffic to measure them against. An earlier version of this document
+quoted precision of 85-95% and an MTTD of 30 seconds; those numbers were never
+measured. What *is* measured — CUSUM false alarm rates and detection lag,
+holdout-attributed lift, interval coverage, cycle cost — is cited above with
+its source.
+
+## Layout
 
 ```
 src/
-├── agent/
-│   ├── core.py            # Main orchestrator
-│   ├── observer.py        # Data ingestion & statistics
-│   ├── reasoner.py        # Pattern detection & hypotheses
-│   ├── decision_maker.py  # Multi-objective decision making
-│   ├── executor.py        # Safe action execution
-│   └── learner.py         # Outcome learning
-├── models/
-│   └── state.py           # Data models & state management
-└── simulation/
-    └── payment_simulator.py  # Transaction simulation
+├── agent/        core loop: observer, reasoner, decision_maker, executor,
+│                 learner, incidents, advisors
+├── analysis/     statistics, experiment, memory
+├── control/      plane (versioned policy), publish (integration surface)
+├── safety/       guardrails, approvals
+├── store/        journal (SQLite)
+├── traffic/      source (interface + replay), gateway (Razorpay, Stripe)
+├── simulation/   payment_simulator
+├── models/       state, data models, authorization map
+├── utils/        settings, stats, config_loader, benchmark
+├── views.py      read models shared by console and API
+└── factory.py    composition root
 ```
 
-## Running the System
+Components take their settings as constructor arguments and never read YAML
+themselves, so each is testable in isolation and there is one answer to "where
+does this threshold come from".
 
-**Demo Mode** (Guided Scenario):
-```bash
-python main.py --mode demo
-```
+## Extending it
 
-Runs a 4-minute demonstration with:
-1. Normal operation (1 min)
-2. Issuer degradation scenario (1.5 min)
-3. Retry storm scenario (1 min)
-
-**Continuous Mode**:
-```bash
-python main.py --mode continuous --duration 60
-```
-
-Runs for specified duration with periodic scenario injection.
-
-## Extension Points
-
-The system is designed to be extensible:
-
-1. **New Pattern Detectors**: Add to `reasoner.py`
-2. **New Action Types**: Add to `decision_maker.py` and `executor.py`
-3. **Custom Metrics**: Extend `observer.py`
-4. **Advanced Learning**: Enhance `learner.py` with ML models
-5. **External Integrations**: Add to `executor.py` (e.g., PagerDuty, Slack)
-
-## Future Enhancements
-
-- Deep reinforcement learning for complex decision spaces
-- Causal inference for better root cause analysis
-- Multi-agent coordination for different payment types
-- LLM-based hypothesis generation
-- Counterfactual simulation
-- A/B testing of intervention strategies
+- **A new action type**: add it to `ActionType`, classify it in
+  `ACTION_AUTHORIZATION` and `safety_rules.yaml` (startup will refuse to
+  proceed until you do), implement it on the control plane, and add its
+  estimated impact to the decision maker.
+- **A new traffic source**: implement `next_batch`, `describe` and `signals`.
+  Declare the signals you cannot supply rather than defaulting them.
+- **A new detector**: add it to the reasoner and give it a statistical basis
+  with a measured false-alarm rate. `src/analysis/statistics.py` has the
+  primitives.
+- **A new gateway**: add a mapper to `src/traffic/gateway.py` with a recorded
+  payload in `tests/fixtures/`. Two providers already disagree about nearly
+  everything, so the seams are in the right places.

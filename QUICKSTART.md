@@ -1,250 +1,156 @@
-# Quick Start Guide
+# Quick Start
 
-## Installation
+## The fastest path
 
-### Prerequisites
-- Python 3.10 or higher
-- pip package manager
-
-### Setup
-
-1. **Clone the repository**:
 ```bash
-git clone <your-repo-url>
 cd payment-agent-system
+python web/server.py
 ```
 
-2. **Install dependencies**:
+Open <http://localhost:8080>. That is the whole setup — no install step, no
+dependencies, no API key. The console and the agent core are standard library
+only.
+
+Inject a failure from the left rail and watch the loop work: the agent detects
+the degradation, ranks its options, applies what it may apply on its own,
+queues what it may not, and measures the result against a concurrent holdout.
+It is not told what you injected — it has to find it.
+
+## What to watch
+
+**The state indicator** moves `observing → mitigating → monitoring`. Mitigating
+means an incident is open; monitoring means an intervention is live and being
+measured.
+
+**Issuer health**, worst first. The injected issuer should visibly separate
+from the others within a few cycles.
+
+**Awaiting authorization** appears when the agent decides on something it is not
+allowed to do alone. Approve or deny it and watch the policy history record who
+decided. If you leave it, it lapses — it is never granted by default.
+
+**Decision trace** shows every alternative that was scored, not only the one
+chosen. This is the screen that distinguishes reasoning from a rules engine.
+
+**Measured effect** shows treated versus held-out control. Early on it reads
+"still collecting": the control arm needs 30 observations before the system
+will call a result significant, and it says so rather than overclaiming from
+three.
+
+**Policy history** is the audit trail. Every revision is attributed and shows
+what actually changed — `+ circuit breaker: SBI`, `+ holdout: SBI = 10% left as
+control`.
+
+## Reading the numbers
+
+| Signal | Healthy | During an incident | After the agent acts |
+|--------|---------|--------------------|----------------------|
+| Success rate | 95-97% | 75-90% | recovers toward 95% |
+| Patterns detected | 0 | 1+ per cycle | falls as the incident closes |
+
+Patterns the agent can detect: `issuer_degradation`, `retry_storm`,
+`method_fatigue`, `latency_spike`, `error_cluster`.
+
+Actions it can take: `circuit_breaker`, `route_change`, `adjust_retry`,
+`method_suppress`, `alert_ops`.
+
+## Other ways to run it
+
+Everything below needs `pip install -r requirements.txt`.
+
 ```bash
-pip install -r requirements.txt
-```
-
-3. **Verify installation**:
-```bash
-python -c "import numpy, scipy; print('Dependencies installed successfully')"
-```
-
-## Running the Agent
-
-### Option 1: Demo Mode (Recommended for First Run)
-
-Run the guided demonstration that showcases all agent capabilities:
-
-```bash
+# Scripted three-phase demo in the terminal (~3 minutes)
 python main.py --mode demo
+
+# Continuous operation with scenarios injected periodically
+python main.py --mode continuous --duration 60
+
+# Record a run, then replay it against current agent code. Replay is how
+# "the agent handled it well" becomes a measurement: the same transactions,
+# re-run after you change a threshold or a weight.
+python main.py --mode continuous --duration 10 --journal data/run.db
+python main.py --mode replay --journal data/run.db
+
+# REST API
+uvicorn api.main:app --reload
+
+# Everything, containerised
+docker-compose up --build
 ```
 
-**What happens**:
-- Phase 1 (60s): Normal payment processing - establishes baseline
-- Phase 2 (90s): Issuer degradation - agent detects and activates circuit breaker
-- Phase 3 (60s): Retry storm - agent adjusts retry strategies
-
-**Expected output**:
-```
-=================================================================
-AGENTIC AI PAYMENT OPERATIONS SYSTEM - DEMONSTRATION
-=================================================================
-
-Initializing payment agent...
-Initializing payment simulator...
-
-=================================================================
-PHASE 1: NORMAL OPERATION (60 seconds)
-=================================================================
-Simulating healthy payment processing...
-
-[12:34:56] Cycle #1: 96.00% success rate, 423 transactions
-[12:35:11] Cycle #2: 95.80% success rate, 861 transactions
-...
-
-=================================================================
-PHASE 2: ISSUER DEGRADATION SCENARIO (90 seconds)
-=================================================================
-🔥 Injected issuer degradation: HDFC_BANK at 60% severity for 90s
-
-[12:36:01] Cycle #5:
-  Success Rate: 82.40%
-  Patterns Detected: 1
-    - issuer_degradation: Issuer HDFC_BANK showing 18.0% drop... (severity: 0.75)
-  Action Taken: circuit_breaker on HDFC_BANK
-    Expected Impact: +15.0% success rate
-...
-```
-
-### Option 2: Continuous Mode
-
-Run the agent continuously with periodic scenario injection:
+## Verifying it works
 
 ```bash
-python main.py --mode continuous --duration 60
+pytest
 ```
 
-This runs for 60 minutes (adjust `--duration` as needed) with random failure scenarios injected every 5 minutes.
+The agent core has no third-party dependencies, so the suite runs without the
+dashboard or LLM stack installed.
 
-## Understanding the Output
-
-### Key Metrics to Watch
-
-**Success Rate**: 
-- Normal: 95-97%
-- During incident: May drop to 75-90%
-- After intervention: Should recover to 90-95%
-
-**Patterns Detected**:
-- `issuer_degradation`: Specific bank/issuer having problems
-- `retry_storm`: Too many retries causing cascading failures
-- `method_fatigue`: Payment method degrading after retries
-- `latency_spike`: Unusual increase in processing time
-- `error_cluster`: Specific error occurring frequently
-
-**Actions Taken**:
-- `circuit_breaker`: Stop routing to failing issuer
-- `adjust_retry`: Change retry strategy (max attempts, backoff)
-- `route_change`: Redirect traffic to alternative processors
-- `alert_ops`: Notify operations team
-
-### Example Agent Decision
-
-```
-[12:36:15] Cycle #6:
-  Patterns Detected: 1
-    - issuer_degradation: Issuer HDFC_BANK showing 18.0% drop in success rate (severity: 0.75)
-  
-  Hypotheses:
-    - issuer_down (60% probability)
-    - issuer_throttling (30% probability)
-    - network_issue (10% probability)
-  
-  Action Taken: circuit_breaker on HDFC_BANK
-    Expected Impact: +15.0% success rate, -200ms latency
-    Risk Level: medium
-    Authorization: automatic
+```bash
+python -m src.utils.benchmark
 ```
 
-## Monitoring Agent Performance
+Measures the real loop under a live incident and reports per-phase timings the
+cycle records about itself. See PERFORMANCE.md.
 
-At the end of each demo, you'll see a comprehensive status report:
+## Turning on the LLM
 
-```
-Final Agent Status:
-  Total Cycles: 14
-  Patterns Detected: 3
-  Actions Executed: 2
-  Success Rate: 2/2
+Optional. Without it the agent detects, decides and acts identically — only the
+written assessment on each incident is missing.
 
-Active Interventions:
-  - circuit_breaker on HDFC_BANK
-
-Learning Summary:
-  Outcomes Recorded: 2
-  Most Effective Actions:
-    - circuit_breaker_HDFC_BANK: +14.8% avg improvement (2 samples)
+```bash
+export GEMINI_API_KEY=your_key_here     # macOS/Linux
+set GEMINI_API_KEY=your_key_here        # Windows CMD
 ```
 
-## Customizing Scenarios
+The advisor runs once per **incident**, not once per cycle, and is given no
+tools. Disable it explicitly with `advisor.enabled: false` in
+`config/agent_config.yaml` if sending incident detail to a provider is not
+acceptable in your environment.
 
-You can modify `main.py` to create custom scenarios:
+## Configuration
 
-```python
-# In the demo function, add your own scenario:
+Change behaviour in `config/*.yaml`, not in code. Defaults live in
+`src/utils/settings.py` and the YAML overrides them, so the system runs with no
+config files present and a config file cannot silently drop a setting the code
+depends on.
 
-# Inject a specific failure
-simulator.inject_issuer_degradation(
-    issuer='ICICI_BANK',
-    severity=0.7,  # 70% failure rate
-    duration_seconds=120  # 2 minutes
-)
+| File | Controls |
+|------|----------|
+| `agent_config.yaml` | window size, detection thresholds, decision weights, holdout fraction, advisor, control plane publishing |
+| `safety_rules.yaml` | authorization tiers, rate limits, blast radius, rollback triggers |
+| `simulation_config.yaml` | baseline success rate, traffic mix |
 
-# Inject latency spike
-simulator.inject_latency_spike(
-    multiplier=4.0,  # 4x normal latency
-    duration_seconds=180
-)
-
-# Inject payment method issues
-simulator.inject_method_fatigue(
-    method=PaymentMethod.CREDIT_CARD,
-    severity=0.5,
-    duration_seconds=200
-)
-```
-
-## Verifying Agent Capabilities
-
-The agent demonstrates the complete observe-reason-decide-act-learn loop:
-
-### ✅ Observe
-- Real-time ingestion of payment transactions
-- Sliding window statistics across multiple dimensions
-- Latency tracking, error monitoring, retry analysis
-
-### ✅ Reason
-- Pattern detection (6 different pattern types)
-- Hypothesis generation with probabilities
-- Confidence scoring based on evidence
-
-### ✅ Decide
-- Multi-objective optimization (success, latency, cost, risk)
-- Trade-off analysis between alternatives
-- Risk-based authorization levels
-
-### ✅ Act
-- Safe execution with pre-flight checks
-- Multiple action types (circuit breakers, retry tuning, routing)
-- Automatic rollback on negative outcomes
-
-### ✅ Learn
-- Action outcome tracking
-- Pattern accuracy refinement
-- Decision weight adaptation
-- Threshold recommendations
+Validation is strict about what is dangerous to get wrong. Decision weights
+must sum to 1.0, and the authorization section must classify every action type
+— adding a capability cannot leave it unclassified and therefore unguarded.
+Both are checked at startup rather than mid-incident.
 
 ## Troubleshooting
 
-**Issue**: Import errors
-```
-ModuleNotFoundError: No module named 'numpy'
-```
-**Solution**: Install requirements
-```bash
-pip install -r requirements.txt
-```
+**The agent detects nothing.** Severity may be too low for the window. Raise it
+(`severity=0.8`) or shorten `window_size_minutes` — a shorter window detects
+faster, at the cost of statistical power on low-volume issuers.
 
-**Issue**: Agent not detecting patterns
-**Cause**: Thresholds may be too high or scenarios too mild
-**Solution**: Increase failure severity in simulator
-```python
-simulator.inject_issuer_degradation(issuer='X', severity=0.8)  # Increase from 0.6
-```
+**An experiment stays "still collecting".** The control arm is 10% of affected
+traffic by default and needs 30 observations. Either wait, or raise
+`holdout_fraction`. This is working as intended: the alternative is announcing
+significance from a handful of transactions.
 
-**Issue**: Too many rollbacks
-**Cause**: Actions may be too aggressive or rollback thresholds too sensitive
-**Solution**: Adjust thresholds in `executor.py`:
-```python
-self.rollback_thresholds = {
-    'success_rate_drop': 0.08,  # Increase from 0.05
-    ...
-}
-```
+**`ModuleNotFoundError` running the console.** There should not be one — the
+console imports nothing outside the standard library. Check you are running
+`python web/server.py` from the project root.
 
-## Next Steps
+**`ModuleNotFoundError: google`** running the dashboard or the tool path. The
+LLM SDK is optional and imported lazily; install it with
+`pip install google-genai`, or use the console, which never needs it.
 
-1. **Read ARCHITECTURE.md** for deep technical details
-2. **Examine src/agent/core.py** to understand the main loop
-3. **Customize decision weights** in `decision_maker.py`
-4. **Add new patterns** in `reasoner.py`
-5. **Extend with real integrations** (databases, monitoring systems, etc.)
+**Too many rollbacks.** Adjust `rollback_triggers` in `safety_rules.yaml`.
 
-## Getting Help
+## Next
 
-Check the comprehensive documentation:
-- `README.md` - Project overview and features
-- `ARCHITECTURE.md` - Technical architecture and implementation
-- Code comments - Detailed inline documentation
-
-For questions about specific components:
-- Observer: See `src/agent/observer.py` docstrings
-- Reasoner: See `src/agent/reasoner.py` docstrings
-- Decision Maker: See `src/agent/decision_maker.py` docstrings
-- Executor: See `src/agent/executor.py` docstrings
-- Learner: See `src/agent/learner.py` docstrings
+- **ARCHITECTURE.md** — how it is put together and why each part is that shape.
+- **PERFORMANCE.md** — measured cost of the loop and what actually scales.
+- **README.md** — connecting it to a real gateway and a real checkout service.
+- `src/agent/core.py` — the loop itself.

@@ -223,32 +223,49 @@ class PaymentAgent:
             'learning_updates': {}
         }
         
+        # Per-phase timings, measured where the phases actually run rather
+        # than reconstructed by a benchmark calling the components separately.
+        # A cycle does work between the phases - journalling, incident
+        # tracking, experiment bookkeeping - that a reconstruction silently
+        # omits, so the parts only add up to the whole if they are timed here.
+        phases: Dict[str, float] = {}
+
+        def timed(name, function, *args):
+            start = time.perf_counter()
+            try:
+                return function(*args)
+            finally:
+                phases[name] = (time.perf_counter() - start) * 1000.0
+
         try:
             # 1. OBSERVE: Update state with current observations
-            self._observe_phase(results)
-            
+            timed('observe', self._observe_phase, results)
+
             # 2. REASON: Detect patterns and form hypotheses
-            patterns = self._reason_phase(results)
-            
+            patterns = timed('reason', self._reason_phase, results)
+
             # 3. DECIDE & ACT: Make decisions and execute actions
             if patterns:
-                self._decide_and_act_phase(patterns, results)
-            
+                timed('decide_act', self._decide_and_act_phase, patterns, results)
+            else:
+                phases['decide_act'] = 0.0
+
             # 4. MONITOR: Check for rollbacks
-            self._monitor_phase(results)
-            
+            timed('monitor', self._monitor_phase, results)
+
             # 5. LEARN: Update from outcomes
-            self._learn_phase(results)
-            
+            timed('learn', self._learn_phase, results)
+
             # Update baselines
-            self.reasoner.update_baselines(self.observer)
-            
+            timed('baselines', self.reasoner.update_baselines, self.observer)
+
         except Exception as e:
             self.logger.error(f"Error in agent cycle: {e}", exc_info=True)
             results['error'] = str(e)
         
         cycle_duration = time.time() - cycle_start
         results['cycle_duration_seconds'] = cycle_duration
+        results['phase_ms'] = phases
         self.last_analysis_time = datetime.now()
         
         self.journal.record_cycle(self.cycle_count, results)

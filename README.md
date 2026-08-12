@@ -307,7 +307,7 @@ payment-agent-system/
 │   ├── agent_config.yaml         # Agent behavior thresholds
 │   ├── safety_rules.yaml         # Safety guardrail configuration
 │   └── simulation_config.yaml    # Simulator parameters
-├── tests/                        # pytest suite (267 tests)
+├── tests/                        # pytest suite; runs with no third-party deps
 ├── data/
 │   ├── sample_payments.json      # Sample transaction data
 │   └── sample_payments.csv       # CSV format
