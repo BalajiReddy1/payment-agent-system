@@ -6,8 +6,18 @@ Defines the core data structures for the payment agent system.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional
 from uuid import uuid4
+
+if TYPE_CHECKING:  # pragma: no cover
+    from src.control.plane import ControlPlane
+
+
+def _new_control_plane():
+    """Imported lazily: the control plane imports nothing from this module,
+    but keeping the import local avoids a package-level cycle."""
+    from src.control.plane import ControlPlane
+    return ControlPlane()
 
 
 class PaymentStatus(Enum):
@@ -181,6 +191,9 @@ class Action:
     approver: Optional[str] = None
     actual_impact: Optional[Dict[str, float]] = None
     rollback_action_id: Optional[str] = None
+    # Control plane revision this action produced, so its effect can be undone
+    # from the record rather than from hand-written per-type undo logic.
+    control_plane_revision: Optional[int] = None
     
     def __post_init__(self):
         if not self.action_id:
@@ -251,11 +264,10 @@ class AgentState:
     successful_transactions: int = 0
     failed_transactions: int = 0
     
-    # Current conditions
-    active_circuit_breakers: Set[str] = field(default_factory=set)
-    suppressed_methods: Set[str] = field(default_factory=set)
-    retry_strategies: Dict[str, Dict] = field(default_factory=dict)
-    routing_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Current interventions in force. These are read-only views onto the
+    # control plane, which is the single writer: policy changes have to go
+    # through ControlPlane so they are versioned, attributed and revertible.
+    control_plane: 'ControlPlane' = field(default_factory=lambda: _new_control_plane())
     
     # Safety metrics
     actions_taken_last_hour: int = 0
@@ -272,6 +284,26 @@ class AgentState:
     actions_executed: int = 0
     alerts_raised: int = 0
     
+    @property
+    def active_circuit_breakers(self) -> FrozenSet[str]:
+        """Issuers currently circuit-broken (read-only; use control_plane to change)."""
+        return self.control_plane.current.circuit_breakers
+
+    @property
+    def suppressed_methods(self) -> FrozenSet[str]:
+        """Payment methods currently suppressed (read-only)."""
+        return self.control_plane.current.suppressed_methods
+
+    @property
+    def retry_strategies(self) -> Dict[str, Dict[str, Any]]:
+        """Retry policies currently in force (read-only)."""
+        return self.control_plane.current.retry_strategies
+
+    @property
+    def routing_overrides(self) -> Dict[str, Dict[str, Any]]:
+        """Routing overrides currently in force (read-only)."""
+        return self.control_plane.current.routing_overrides
+
     def update_metrics(self, transactions: List[PaymentTransaction]):
         """Update state metrics from transactions"""
         self.total_transactions = len(transactions)

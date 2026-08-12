@@ -244,16 +244,43 @@ def get_agent_state() -> str:
         A JSON string of the current agent state.
     """
     active_interventions = executor.get_active_interventions()
+    policy = agent_state.control_plane.current
     state_info = {
         "overall_success_rate": agent_state.overall_success_rate,
         "average_latency_ms": agent_state.average_latency_ms,
-        "active_circuit_breakers": list(agent_state.active_circuit_breakers),
-        "suppressed_methods": list(agent_state.suppressed_methods),
-        "retry_strategies": agent_state.retry_strategies,
-        "routing_overrides": agent_state.routing_overrides,
+        "control_plane": policy.to_dict(),
         "active_interventions_count": len(active_interventions),
+        "pending_approvals": len(pending_approvals),
     }
     return json.dumps(state_info, default=str, indent=2)
+
+
+def get_control_plane_history(limit: int = 10) -> str:
+    """Show recent changes to payment policy, newest first.
+
+    Use this to answer questions like "why is UPI suppressed right now" or
+    "what changed in the last few minutes".
+
+    Args:
+        limit: How many revisions to return.
+
+    Returns:
+        A JSON string describing each revision and what it changed.
+    """
+    from src.control.plane import diff
+
+    revisions = agent_state.control_plane.history(limit=limit)
+    entries = []
+    for revision in revisions:
+        parent = agent_state.control_plane.get(revision.parent_revision)
+        entries.append({
+            "revision": revision.revision,
+            "at": revision.created_at.isoformat(),
+            "author": revision.author,
+            "reason": revision.reason,
+            "changed": diff(parent, revision) if parent else [],
+        })
+    return json.dumps(entries, indent=2)
 
 
 def list_pending_approvals() -> str:
@@ -319,5 +346,6 @@ ALL_TOOLS = [
     alert_ops_team,
     monitor_and_rollback,
     get_agent_state,
+    get_control_plane_history,
     list_pending_approvals,
 ]

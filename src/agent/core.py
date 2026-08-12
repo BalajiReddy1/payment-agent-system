@@ -371,12 +371,16 @@ class PaymentAgent:
             'is_active': self.state.is_active,
             'cycle_count': self.cycle_count,
             'last_analysis': self.last_analysis_time.isoformat() if self.last_analysis_time else None,
+            'control_plane': {
+                'revision': self.state.control_plane.revision,
+                'policy': self.state.control_plane.current.to_dict(),
+            },
             'state': {
                 'success_rate': self.state.overall_success_rate,
                 'avg_latency_ms': self.state.average_latency_ms,
                 'total_transactions': self.state.total_transactions,
-                'active_circuit_breakers': list(self.state.active_circuit_breakers),
-                'suppressed_methods': list(self.state.suppressed_methods),
+                'active_circuit_breakers': sorted(self.state.active_circuit_breakers),
+                'suppressed_methods': sorted(self.state.suppressed_methods),
                 'actions_taken_last_hour': self.state.actions_taken_last_hour,
                 'rollbacks_last_hour': self.state.rollbacks_last_hour
             },

@@ -97,11 +97,14 @@ class PaymentExecutor:
         baseline_metrics = self.capture_metrics(observer)
         
         # Execute based on action type
+        revision_before = state.control_plane.revision
         success, message = self._execute_by_type(action, state)
-        
+
         if success:
             action.status = "executed"
             action.executed_at = datetime.now()
+            if state.control_plane.revision != revision_before:
+                action.control_plane_revision = state.control_plane.revision
             if stateful:
                 self.active_interventions[action.action_id] = action
             else:
@@ -196,6 +199,15 @@ class PaymentExecutor:
         else:
             return False, f"Unknown action type: {action.action_type}"
     
+    @staticmethod
+    def _attribution(action: Action) -> Dict[str, str]:
+        """Who and why, recorded on every control plane revision."""
+        return {
+            'author': f"operator:{action.approver}" if action.approver else 'agent',
+            'reason': f"{action.action_type.value} on {action.target}",
+            'action_id': action.action_id,
+        }
+
     def _execute_circuit_breaker(
         self,
         action: Action,
@@ -204,20 +216,19 @@ class PaymentExecutor:
         """Execute circuit breaker action"""
         issuer = action.parameters.get('issuer')
         duration_minutes = action.parameters.get('duration_minutes', 10)
-        
+
         if not issuer:
             return False, "No issuer specified"
-        
-        # Activate circuit breaker
-        state.active_circuit_breakers.add(issuer)
-        
+
+        state.control_plane.trip_breaker(issuer, **self._attribution(action))
+
         self.logger.info(
             f"Circuit breaker activated for issuer {issuer} "
             f"for {duration_minutes} minutes"
         )
-        
+
         return True, f"Circuit breaker activated for {issuer}"
-    
+
     def _execute_retry_adjustment(
         self,
         action: Action,
@@ -225,26 +236,24 @@ class PaymentExecutor:
     ) -> Tuple[bool, str]:
         """Execute retry strategy adjustment"""
         target = action.target
-        max_retries = action.parameters.get('max_retries')
-        backoff_multiplier = action.parameters.get('backoff_multiplier')
-        timeout_ms = action.parameters.get('timeout_ms')
-        
-        # Update retry strategy
-        strategy = state.retry_strategies.get(target, {})
-        
-        if max_retries is not None:
-            strategy['max_retries'] = max_retries
-        if backoff_multiplier is not None:
-            strategy['backoff_multiplier'] = backoff_multiplier
-        if timeout_ms is not None:
-            strategy['timeout_ms'] = timeout_ms
-        
-        state.retry_strategies[target] = strategy
-        
+
+        strategy = {
+            key: action.parameters[key]
+            for key in ('max_retries', 'backoff_multiplier', 'timeout_ms')
+            if action.parameters.get(key) is not None
+        }
+
+        if not strategy:
+            return False, "No retry parameters supplied"
+
+        state.control_plane.set_retry_strategy(
+            target, strategy, **self._attribution(action)
+        )
+
         self.logger.info(f"Retry strategy updated for {target}: {strategy}")
-        
+
         return True, f"Retry strategy adjusted for {target}"
-    
+
     def _execute_route_change(
         self,
         action: Action,
@@ -252,18 +261,21 @@ class PaymentExecutor:
     ) -> Tuple[bool, str]:
         """Execute routing change"""
         target = action.target
-        
-        # Store routing override
-        state.routing_overrides[target] = {
-            'alternative_routing': action.parameters.get('alternative_routing', False),
-            'reduce_routing_pct': action.parameters.get('reduce_routing_pct', 0),
-            'applied_at': datetime.now()
-        }
-        
+
+        state.control_plane.set_routing_override(
+            target,
+            {
+                'alternative_routing': action.parameters.get('alternative_routing', False),
+                'reduce_routing_pct': action.parameters.get('reduce_routing_pct', 0),
+                'applied_at': datetime.now().isoformat(),
+            },
+            **self._attribution(action),
+        )
+
         self.logger.info(f"Routing changed for {target}")
-        
+
         return True, f"Routing adjusted for {target}"
-    
+
     def _execute_method_suppress(
         self,
         action: Action,
@@ -271,16 +283,16 @@ class PaymentExecutor:
     ) -> Tuple[bool, str]:
         """Execute payment method suppression"""
         method = action.parameters.get('payment_method')
-        
+
         if not method:
             return False, "No payment method specified"
-        
-        state.suppressed_methods.add(method)
-        
+
+        state.control_plane.suppress_method(method, **self._attribution(action))
+
         self.logger.warning(f"Payment method {method} suppressed")
-        
+
         return True, f"Payment method {method} temporarily suppressed"
-    
+
     def _execute_alert(
         self,
         action: Action,
@@ -365,7 +377,7 @@ class PaymentExecutor:
                 continue
 
             if self._has_expired(action):
-                if self._revert_action(action, state):
+                if self._revert_action(action, state, 'expired'):
                     action.status = "completed"
                     self.expired_actions.append(action_id)
                     self.logger.info(
@@ -378,7 +390,7 @@ class PaymentExecutor:
                 action, baseline, current_metrics
             )
 
-            if should_rollback and self._revert_action(action, state):
+            if should_rollback and self._revert_action(action, state, 'rolled back'):
                 action.status = "rolled_back"
                 rolled_back.append(action_id)
                 state.rollbacks_last_hour += 1
@@ -419,33 +431,27 @@ class PaymentExecutor:
 
         return False, ""
 
-    def _revert_action(self, action: Action, state: AgentState) -> bool:
+    def _revert_action(self, action: Action, state: AgentState, why: str) -> bool:
         """
         Undo an executed action's effect on the control plane.
 
-        Used for both rollback (the action was harmful) and expiry (the action
-        finished its run); the mechanics are identical, only the bookkeeping
-        differs.
+        The inverse is derived from the revision the action produced, so it
+        cannot drift away from what the action actually did. A hand-written
+        undo branch per action type is a second implementation of the same
+        knowledge, and the two fall out of step silently.
+
+        Used for both rollback (the action was harmful) and expiry (it ran its
+        course); the mechanics are identical, only the bookkeeping differs.
         """
         try:
-            if action.action_type == ActionType.CIRCUIT_BREAKER:
-                issuer = action.parameters.get('issuer')
-                state.active_circuit_breakers.discard(issuer)
-            
-            elif action.action_type == ActionType.ADJUST_RETRY:
-                target = action.target
-                if target in state.retry_strategies:
-                    del state.retry_strategies[target]
-            
-            elif action.action_type == ActionType.ROUTE_CHANGE:
-                target = action.target
-                if target in state.routing_overrides:
-                    del state.routing_overrides[target]
-            
-            elif action.action_type == ActionType.METHOD_SUPPRESS:
-                method = action.parameters.get('payment_method')
-                state.suppressed_methods.discard(method)
-            
+            if action.control_plane_revision is not None:
+                state.control_plane.undo_revision(
+                    action.control_plane_revision,
+                    author='agent',
+                    reason=f"{why}: {action.action_type.value} on {action.target}",
+                    action_id=action.action_id,
+                )
+
             # Remove from active interventions
             if action.action_id in self.active_interventions:
                 del self.active_interventions[action.action_id]

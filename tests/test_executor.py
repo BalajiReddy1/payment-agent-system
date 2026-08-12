@@ -101,6 +101,49 @@ def test_duplicate_stateful_action_is_refused():
     assert 'already active' in message
 
 
+def test_rolling_back_one_intervention_leaves_another_running():
+    """
+    Two unrelated interventions are live; one turns harmful and is withdrawn.
+    Deriving the undo from the revision it produced means the other survives -
+    a snapshot-style revert to the previous revision would have clobbered it.
+    """
+    executor = PaymentExecutor()
+    state = AgentState()
+    observer = StubObserver()
+
+    breaker = approved(make_action(parameters={'issuer': 'HDFC_BANK', 'duration_minutes': 60}))
+    retry = make_action(
+        action_type=ActionType.ADJUST_RETRY,
+        target='global_retry_strategy',
+        parameters={'max_retries': 1, 'duration_minutes': 60},
+        risk_level=RiskLevel.LOW,
+    )
+    executor.execute(breaker, state, observer)
+    executor.execute(retry, state, observer)
+
+    # Only the breaker is expired; the retry adjustment keeps running
+    breaker.executed_at = datetime.now() - timedelta(minutes=120)
+    executor.monitor_and_rollback(state, observer)
+
+    assert state.active_circuit_breakers == frozenset()
+    assert state.retry_strategies['global_retry_strategy']['max_retries'] == 1
+    assert retry.action_id in executor.active_interventions
+
+
+def test_action_records_the_revision_it_produced():
+    executor = PaymentExecutor()
+    state = AgentState()
+    observer = StubObserver()
+
+    action = approved(make_action())
+    executor.execute(action, state, observer)
+
+    assert action.control_plane_revision == state.control_plane.revision
+    revision = state.control_plane.get(action.control_plane_revision)
+    assert revision.action_id == action.action_id
+    assert revision.author.startswith('operator:')
+
+
 def test_revert_restores_every_control_plane_field():
     executor = PaymentExecutor()
     state = AgentState()

@@ -181,10 +181,18 @@ class PaymentSimulator:
         self.control_plane = control_plane
 
     def _cp(self, attribute: str, default):
-        """Read a control-plane field, tolerating no control plane at all."""
-        if self.control_plane is None:
+        """
+        Read a policy field from whatever control plane is attached.
+
+        Accepts either a ControlPlane (reads its current revision) or anything
+        exposing the four policy attributes directly, such as AgentState.
+        """
+        source = self.control_plane
+        if source is None:
             return default
-        return getattr(self.control_plane, attribute, default)
+        if hasattr(source, 'current'):  # a ControlPlane
+            source = source.current
+        return getattr(source, attribute, default)
 
     def _apply_routing(self, issuer: str) -> tuple:
         """

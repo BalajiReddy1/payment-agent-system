@@ -25,7 +25,7 @@ def test_circuit_breaker_diverts_traffic_away_from_issuer():
     state = AgentState()
     simulator = PaymentSimulator(control_plane=state)
 
-    state.active_circuit_breakers.add('HDFC_BANK')
+    state.control_plane.trip_breaker('HDFC_BANK', author='test', reason='outage')
     batch = simulator.generate_stream(count=400, start_time=datetime.now())
 
     assert not any(t.issuer == 'HDFC_BANK' for t in batch)
@@ -39,7 +39,7 @@ def test_circuit_breaker_restores_success_rate_during_outage():
 
     degraded = success_rate(simulator.generate_stream(count=600, start_time=datetime.now()))
 
-    state.active_circuit_breakers.add('HDFC_BANK')
+    state.control_plane.trip_breaker('HDFC_BANK', author='test', reason='outage')
     mitigated = success_rate(simulator.generate_stream(count=600, start_time=datetime.now()))
 
     assert mitigated > degraded + 0.05
@@ -49,7 +49,9 @@ def test_suppressed_method_stops_being_offered():
     state = AgentState()
     simulator = PaymentSimulator(control_plane=state)
 
-    state.suppressed_methods.add(PaymentMethod.UPI.value)
+    state.control_plane.suppress_method(
+        PaymentMethod.UPI.value, author='test', reason='fatigue'
+    )
     batch = simulator.generate_stream(count=300, start_time=datetime.now())
 
     assert not any(t.payment_method == PaymentMethod.UPI for t in batch)
@@ -62,7 +64,9 @@ def test_retry_limit_reduces_retry_volume():
     before = simulator.generate_stream(count=2000, start_time=datetime.now())
     baseline_retries = sum(1 for t in before if t.is_retry)
 
-    state.retry_strategies['global_retry_strategy'] = {'max_retries': 1}
+    state.control_plane.set_retry_strategy(
+        'global_retry_strategy', {'max_retries': 1}, author='test', reason='retry storm'
+    )
     after = simulator.generate_stream(count=2000, start_time=datetime.now())
     limited_retries = sum(1 for t in after if t.is_retry)
 
@@ -74,7 +78,9 @@ def test_tightened_timeout_truncates_latency():
     simulator = PaymentSimulator(control_plane=state)
     simulator.inject_latency_spike(multiplier=6.0, duration_seconds=3600)
 
-    state.retry_strategies['timeout_settings'] = {'timeout_ms': 400}
+    state.control_plane.set_retry_strategy(
+        'timeout_settings', {'timeout_ms': 400}, author='test', reason='latency spike'
+    )
     batch = simulator.generate_stream(count=300, start_time=datetime.now())
 
     assert all(t.latency_ms <= 400 for t in batch)
@@ -88,7 +94,9 @@ def test_routing_override_reduces_issuer_share():
     before = simulator.generate_stream(count=1500, start_time=datetime.now())
     baseline_share = sum(1 for t in before if t.issuer == 'HDFC_BANK')
 
-    state.routing_overrides['HDFC_BANK'] = {'reduce_routing_pct': 80}
+    state.control_plane.set_routing_override(
+        'HDFC_BANK', {'reduce_routing_pct': 80}, author='test', reason='degradation'
+    )
     after = simulator.generate_stream(count=1500, start_time=datetime.now())
     reduced_share = sum(1 for t in after if t.issuer == 'HDFC_BANK')
 
