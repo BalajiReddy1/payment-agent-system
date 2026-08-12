@@ -318,7 +318,10 @@ def test_a_failing_advisor_does_not_stop_the_agent():
 
 
 def test_agent_runs_with_no_advisor_at_all():
-    agent = build_agent(window_size_minutes=5)
+    # Passed explicitly: the factory now resolves an advisor from config and
+    # the environment, so leaving it out would make this test depend on
+    # whether the machine running it happens to have an API key.
+    agent = build_agent(window_size_minutes=5, advisor=None)
     simulator = build_simulator(control_plane=agent.state)
 
     agent.process_batch(simulator.generate_stream(count=200, start_time=datetime.now()))

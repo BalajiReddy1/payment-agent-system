@@ -1,16 +1,20 @@
 """
-ADK Agent — "The Brain"
+ADK Agent — the tool-calling path.
+
 Uses Gemini 2.5 Flash via the google-genai SDK with native Python function-calling.
 No MCP subprocess, no asyncio — fully synchronous and Cloud Run compatible.
+
+The SDK import is deliberately deferred into analyze_and_act(). This module is
+imported by the dashboard, and the dashboard's job — showing what the agent
+detected and did — needs no LLM at all. Importing google.genai at module scope
+meant a missing optional package took the entire UI down with a
+ModuleNotFoundError, for a capability that page never used.
 """
 
 import os
 import json
 import logging
 from typing import Dict, Any
-
-from google import genai
-from google.genai import types
 
 from payment_tools import ALL_TOOLS
 
@@ -40,9 +44,24 @@ def analyze_and_act(metrics_summary: str) -> Dict[str, Any]:
 
     Returns:
         Dict with keys: agent_reasoning, tool_called, tool_result
+
+    Raises:
+        RuntimeError: if the google-genai SDK is not installed. Callers that
+            treat the LLM as optional should catch this; nothing else in the
+            system depends on it.
     """
 
-    # 1. Initialize Gemini client
+    # 1. Initialize Gemini client. Imported here, not at module scope, so the
+    #    dashboard can start without the SDK present.
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:
+        raise RuntimeError(
+            "google-genai is not installed; the tool-calling path is "
+            "unavailable. Install it with `pip install google-genai`."
+        ) from exc
+
     client = genai.Client()
 
     # 2. Create chat with tools wired in natively

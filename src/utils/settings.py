@@ -100,6 +100,24 @@ class SimulationSettings:
 
 
 @dataclass
+class AdvisorSettings:
+    """
+    The slow lane of the two-lane brain.
+
+    Disabled-by-default would be the wrong default: an advisor that cannot
+    reach a model already returns None and the agent runs without commentary.
+    So `enabled` exists to turn the lane *off* deliberately - in a test, or
+    where sending incident detail to a provider is not acceptable - rather
+    than to turn it on.
+    """
+
+    enabled: bool = True
+    model: str = "gemini-2.5-flash"
+    temperature: float = 0.2
+    max_chars: int = 600
+
+
+@dataclass
 class Settings:
     agent: AgentSettings = field(default_factory=AgentSettings)
     thresholds: ThresholdSettings = field(default_factory=ThresholdSettings)
@@ -107,6 +125,7 @@ class Settings:
     learning: LearningSettings = field(default_factory=LearningSettings)
     rollback: RollbackSettings = field(default_factory=RollbackSettings)
     simulation: SimulationSettings = field(default_factory=SimulationSettings)
+    advisor: AdvisorSettings = field(default_factory=AdvisorSettings)
 
     # Safety limits are described by SafetyLimits itself; kept as a plain dict
     # here so this module does not import the safety package.
@@ -182,6 +201,13 @@ class Settings:
         _assign(self.learning, {
             'weight_adjustment_rate': get_config_value(config, 'learning.weight_adjustment_rate'),
             'min_samples_for_update': get_config_value(config, 'learning.min_samples_for_update'),
+        })
+
+        _assign(self.advisor, {
+            'enabled': get_config_value(config, 'advisor.enabled'),
+            'model': get_config_value(config, 'advisor.model'),
+            'temperature': get_config_value(config, 'advisor.temperature'),
+            'max_chars': get_config_value(config, 'advisor.max_chars'),
         })
 
         weights = config.get('decision_weights')

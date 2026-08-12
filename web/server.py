@@ -109,6 +109,24 @@ class AgentRunner:
 
     # ── Read models for the console ──────────────────────────────────────────
 
+    def health(self):
+        """
+        Liveness for container orchestrators.
+
+        Serving a page is not the same as running the agent: the HTTP thread
+        survives a dead cycle loop perfectly well. So this reports whether the
+        loop thread is alive and how many cycles it has completed, and answers
+        503 when the thread has stopped - otherwise a crashed agent would keep
+        passing its own health check.
+        """
+        alive = self._thread is not None and self._thread.is_alive()
+        return {
+            'status': 'ok' if alive else 'degraded',
+            'loop_running': alive,
+            'cycles': self.agent.cycle_count,
+            'advisor': self.agent.advisor is not None,
+        }
+
     def snapshot(self):
         agent = self.agent
         status = agent.get_status()
@@ -267,6 +285,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
         if path in ('/', '/index.html'):
             return self._send_file(WEB_ROOT / 'index.html')
+        if path in ('/health', '/api/health'):
+            report = self.runner.health()
+            return self._send_json(report, status=200 if report['loop_running'] else 503)
         if path == '/api/snapshot':
             return self._send_json(self.runner.snapshot())
         if path == '/api/stream':

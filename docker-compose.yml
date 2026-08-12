@@ -1,7 +1,31 @@
 version: '3.8'
 
 services:
-  # Streamlit Dashboard
+  # Operations console — the UI. Standard library only, so it comes up even
+  # when every optional dependency is missing.
+  console:
+    build: .
+    container_name: payment-console
+    ports:
+      - "8080:8080"
+    command: python web/server.py 8080
+    environment:
+      - PYTHONPATH=/app
+      # Optional: enables the incident advisor. Without it the agent detects,
+      # decides and acts exactly the same, just without written commentary.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      - ./config:/app/config:ro
+    restart: unless-stopped
+    healthcheck:
+      # /health reports 503 when the agent's cycle thread has died, so a
+      # container that serves pages but has stopped thinking is not "healthy".
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Streamlit dashboard — the original UI, kept for comparison.
   dashboard:
     build: .
     container_name: payment-dashboard
@@ -10,6 +34,8 @@ services:
     command: streamlit run dashboard/app.py --server.port=8501 --server.address=0.0.0.0
     environment:
       - PYTHONPATH=/app
+    profiles:
+      - legacy # Only runs when: docker-compose --profile legacy up
     volumes:
       - ./config:/app/config:ro
     restart: unless-stopped

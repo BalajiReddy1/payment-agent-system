@@ -1,12 +1,22 @@
 # The agent core (src/, payment_tools.py) depends only on the standard library,
-# so it can be imported, tested and replayed without installing anything.
-# Everything below is for the dashboard, API and LLM surfaces.
+# so it can be imported, tested and replayed without installing anything. The
+# operations console in web/ is stdlib too - `python web/server.py` needs none
+# of this. Everything below is for the optional surfaces.
 
+# Streamlit dashboard (superseded by web/, kept for comparison)
 streamlit>=1.28.0
 plotly>=5.18.0
 pandas>=2.0.0
+
+# Config loading. Absent, the code falls back to the defaults in settings.py.
 pyyaml>=6.0.0
+
+# REST API
 fastapi>=0.109.0
 uvicorn>=0.27.0
+
+# LLM surfaces: the incident advisor and the tool-calling path. Both import
+# this lazily and degrade to "no commentary" if it is missing, so the agent
+# runs without it.
 google-genai
 mcp

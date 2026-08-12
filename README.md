@@ -264,7 +264,13 @@ payment-agent-system/
 │   │   ├── reasoner.py           # Pattern detection & hypothesis generation
 │   │   ├── decision_maker.py     # Multi-objective decision engine
 │   │   ├── executor.py           # Action execution with safety guardrails
+│   │   ├── incidents.py          # Collapses repeated detections into one incident
+│   │   ├── advisors.py           # Slow lane: written assessment, once per incident
 │   │   └── learner.py            # Reinforcement learning from outcomes
+│   ├── analysis/
+│   │   ├── statistics.py         # Bayesian rate estimation, z-tests, CUSUM
+│   │   ├── experiment.py         # Concurrent holdout experiments
+│   │   └── memory.py             # Incident recall by structured similarity
 │   ├── control/
 │   │   └── plane.py              # Versioned policy document (the agent's only output)
 │   ├── store/
@@ -274,7 +280,8 @@ payment-agent-system/
 │   ├── models/
 │   │   └── state.py              # Agent state, memory, data models & authorization tiers
 │   ├── safety/
-│   │   └── guardrails.py         # Authorization tiers, rate limits & blast radius
+│   │   ├── guardrails.py         # Authorization tiers, rate limits & blast radius
+│   │   └── approvals.py          # Approval queue; unanswered requests lapse
 │   ├── simulation/
 │   │   └── payment_simulator.py  # Transaction & failure scenario simulation
 │   ├── factory.py                # Composition root: config -> wired objects
@@ -283,17 +290,22 @@ payment-agent-system/
 │       ├── stats.py              # Stdlib percentile/mean helpers
 │       ├── benchmark.py          # Performance benchmarking
 │       └── config_loader.py      # YAML configuration loader
+├── web/                          # Operations console — the primary UI
+│   ├── server.py                 # Stdlib http.server + SSE; no build step
+│   ├── index.html                # Console markup
+│   ├── styles.css                # Design tokens and layout
+│   └── app.js                    # Live updates, approvals, scenario injection
 ├── api/
 │   └── main.py                   # FastAPI REST endpoints
 ├── dashboard/
-│   ├── app.py                    # Streamlit real-time command center
+│   ├── app.py                    # Streamlit dashboard (superseded by web/)
 │   ├── components.py             # Reusable UI components
 │   └── styles.py                 # Dark theme CSS
 ├── config/
 │   ├── agent_config.yaml         # Agent behavior thresholds
 │   ├── safety_rules.yaml         # Safety guardrail configuration
 │   └── simulation_config.yaml    # Simulator parameters
-├── tests/                        # pytest suite (98 tests)
+├── tests/                        # pytest suite (193 tests)
 ├── data/
 │   ├── sample_payments.json      # Sample transaction data
 │   └── sample_payments.csv       # CSV format
@@ -311,30 +323,45 @@ payment-agent-system/
 
 ### Prerequisites
 - Python 3.11+
-- A [Google Gemini API key](https://aistudio.google.com/apikey)
+- Nothing else, for the console or the agent.
+- Optional: a [Google Gemini API key](https://aistudio.google.com/apikey), which
+  turns on the incident advisor. Without it the agent detects, decides and acts
+  identically — only the written assessment on each incident is missing.
 
-### Option 1: Local Development
+### Option 1: the operations console
+
+The console has no build step and no third-party dependencies. It runs the
+agent on a background thread and streams its state over SSE:
 
 ```bash
-# Clone and setup
 cd payment-agent-system
+python web/server.py            # → http://localhost:8080
+```
+
+That is the whole setup. Inject a failure from the console and watch the loop
+detect it, propose a response, queue what it may not do alone, and measure the
+result against a concurrent holdout.
+
+### Option 2: everything else
+
+```bash
 python -m venv venv
 .\venv\Scripts\activate        # Windows
 # source venv/bin/activate     # macOS/Linux
 pip install -r requirements.txt
 
-# Set your Gemini API key
+# Optional — enables the incident advisor
 set GEMINI_API_KEY=your_key_here          # Windows CMD
 # export GEMINI_API_KEY=your_key_here     # macOS/Linux
 
-# Run the Dashboard (includes Gemini Agent)
-streamlit run dashboard/app.py
-
-# Run the CLI Demo (rule-based loop)
+# CLI demo (rule-based loop)
 python main.py --mode demo
 
-# Run the REST API (separate terminal)
+# REST API
 uvicorn api.main:app --reload
+
+# Streamlit dashboard (superseded by the console)
+streamlit run dashboard/app.py
 ```
 
 ### Running the tests
@@ -347,19 +374,22 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-### Option 2: Docker
+### Option 3: Docker
 
 ```bash
-# Start all services (Dashboard + API)
+# Start the console and the API
 docker-compose up --build
 
 # Access:
-# Dashboard: http://localhost:8501
-# API:       http://localhost:8000
-# API Docs:  http://localhost:8000/docs
+# Console:  http://localhost:8080
+# API:      http://localhost:8000
+# API Docs: http://localhost:8000/docs
+
+# The Streamlit dashboard is kept behind a profile
+docker-compose --profile legacy up
 ```
 
-### Option 3: Google Cloud Run
+### Option 4: Google Cloud Run
 
 ```bash
 # Set your GCP project

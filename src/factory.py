@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Optional, Tuple
 
+from src.agent.advisors import build_advisor
 from src.agent.core import PaymentAgent
 from src.models.state import ACTION_AUTHORIZATION
 from src.safety.guardrails import SafetyGuardrails, SafetyLimits
@@ -53,6 +54,7 @@ def build_agent(
         'outcome_evaluation_seconds': settings.agent.outcome_evaluation_seconds,
         'holdout_fraction': settings.agent.holdout_fraction,
         'journal': journal,
+        'advisor': _advisor_for(settings),
     }
     agent_kwargs.update(overrides)
 
@@ -87,6 +89,31 @@ def build_agent(
         logger.info("Authorization tiers loaded from safety_rules.yaml")
 
     return agent
+
+
+def _advisor_for(settings: Settings):
+    """
+    Resolve the incident advisor, or None.
+
+    None is an ordinary outcome, not a failure: no API key, no SDK installed,
+    or the lane switched off in config. The agent detects, decides and acts
+    identically either way - only the written assessment is missing - so this
+    never raises and never blocks startup.
+    """
+    if not settings.advisor.enabled:
+        logger.info("Advisor disabled in config; running without commentary")
+        return None
+
+    advisor = build_advisor(
+        model=settings.advisor.model,
+        temperature=settings.advisor.temperature,
+        max_chars=settings.advisor.max_chars,
+    )
+    if advisor is None:
+        logger.info("No advisor available; the agent will run without commentary")
+    else:
+        logger.info("Advisor enabled: %s", settings.advisor.model)
+    return advisor
 
 
 def build_simulator(

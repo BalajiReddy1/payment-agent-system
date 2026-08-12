@@ -17,6 +17,9 @@ COPY . .
 
 # Cloud Run sets the PORT environment variable (usually 8080)
 ENV PORT=8080
+EXPOSE 8080
 
-# Command to run the Streamlit dashboard
-CMD streamlit run dashboard/app.py --server.port=${PORT} --server.address=0.0.0.0
+# Run the operations console. It binds 0.0.0.0 itself and is built on
+# http.server from the standard library, so the image serves the UI even if
+# every optional dependency above failed to install.
+CMD ["sh", "-c", "python web/server.py ${PORT}"]

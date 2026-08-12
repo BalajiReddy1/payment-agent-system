@@ -64,6 +64,29 @@ decision_weights:
   cost: 0.20
   risk: 0.15
 
+# Incident Advisor (the slow lane)
+#
+# The deterministic lane detects, scores and acts on its own; the advisor is
+# asked only to write the assessment a human reads on the incident. It runs
+# once per incident, not once per cycle, and it is given no tools - a second
+# path to change payment routing would bypass the ranking, the authorization
+# tiers and the holdout measurement.
+#
+# If no API key is set or the SDK is not installed, the agent simply runs
+# without commentary. Set enabled to false to switch the lane off even when a
+# model is reachable, e.g. where sending incident detail to a provider is not
+# acceptable.
+advisor:
+  enabled: true
+  model: gemini-2.5-flash
+
+  # Low on purpose: this is an explanation, not a brainstorm.
+  temperature: 0.2
+
+  # Assessments render inline on an incident card, so an essay is worse
+  # than a sentence.
+  max_chars: 600
+
 # Logging
 logging:
   level: INFO
