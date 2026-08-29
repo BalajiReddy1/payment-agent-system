@@ -1,594 +1,122 @@
-# 🏦 Agentic AI for Smart Payment Operations
+# Flowstate
 
-An autonomous payment operations agent. It watches live payment traffic,
-detects failure patterns statistically, decides whether intervening is worth
-it, changes routing policy through a versioned control plane, and measures
-whether its own actions actually helped.
+**Payment recovery with evidence.** Flowstate spots a sustained payment
+degradation, chooses a bounded response, records what changed, and compares
+the result with an untreated holdout before it claims value recovered.
 
----
+The product consists of a Next.js operations desk and a FastAPI runtime. It is
+designed to make the recovery decision inspectable: what failed, why the
+response was chosen, what required approval, and whether it actually helped.
 
-## Why this exists
+## What to see first
 
-Payment failures are found late. A dashboard spikes, or a merchant complains,
-and by then the revenue is gone. The failure modes are varied enough — issuer
-downtime, throttling, retry storms, method fatigue, latency — that a rules
-engine either fires constantly or misses everything.
+1. Start the product and open `http://localhost:3000`.
+2. Select **Run demo**.
+3. Watch the incident appear, the routing response be evaluated, and the
+   recovery result populate against the control group.
 
-What this does instead:
+The demonstration is deterministic, so the same scenario and measurement are
+reproducible for a review or recorded walkthrough.
 
-- **Detects statistically, not by threshold.** Log-likelihood-ratio CUSUM plus
-  Bayesian rate estimates, so a detection carries a false-alarm rate that was
-  measured rather than guessed.
-- **Scores every option, including doing nothing.** The decision trace shows
-  the alternatives that lost, not just the winner.
-- **Changes policy through one versioned document.** Every intervention is an
-  attributed revision to a control plane, so rollback is derived by diffing
-  revisions rather than hand-written per action type.
-- **Measures its own effect against a concurrent holdout.** A slice of affected
-  traffic is deliberately left untreated, because comparing after against
-  before is confounded by the incident resolving on its own.
-- **Knows what it may not do alone.** Three authorization tiers, an approval
-  queue where unanswered requests lapse rather than auto-grant, and an audit
-  trail that never files an agent's decision under a person's name.
-- **Runs the LLM as an advisor, not a decision-maker.** The deterministic lane
-  decides and acts; a model is asked once per incident to explain the situation
-  to whoever is on call, and it is given no tools. The whole system runs
-  without it.
+## System architecture
 
----
-
-## 🏗️ Architecture
-
-The system follows a **"Brain + Hands"** architecture:
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                      Payment Agent System                                │
-├──────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│   ┌─────────────────────┐      ┌──────────────────────────────────────┐  │
-│   │  🧠 THE BRAIN       │      │  🤚 THE HANDS                       │  │
-│   │  (adk_agent.py)     │      │  (payment_tools.py)                 │  │
-│   │                     │      │                                     │  │
-│   │  Gemini 2.5 Flash   │─────▶│  execute_circuit_breaker()          │  │
-│   │  + System Prompt    │      │  adjust_retry_strategy()            │  │
-│   │  + Native Function  │      │  change_routing()                   │  │
-│   │    Calling (ADK)    │◀─────│  suppress_payment_method()          │  │
-│   │                     │      │  alert_ops_team()                   │  │
-│   └─────────────────────┘      │  monitor_and_rollback()             │  │
-│            │                   │  get_agent_state()                  │  │
-│            │                   └──────────────┬───────────────────────┘  │
-│            │                                  │                          │
-│   ┌────────▼──────────────────────────────────▼──────────────────────┐   │
-│   │                OBSERVE → REASON → DECIDE → ACT → LEARN          │   │
-│   │                                                                  │   │
-│   │   Observer    Reasoner    Decision     Executor     Learner      │   │
-│   │   .py         .py        Maker.py     .py          .py          │   │
-│   └──────────────────────────────────────────────────────────────────┘   │
-│                                                                          │
-│   ┌──────────────────────────────────────────────────────────────────┐   │
-│   │              🛡️ Safety (src/safety/guardrails.py)                │   │
-│   │   • 3-tier authorization, enforced on every path                 │   │
-│   │   • Rate limits, blast radius, concurrency, min confidence       │   │
-│   └──────────────────────────────────────────────────────────────────┘   │
-│                                  │ the only way to change payment policy  │
-│   ┌──────────────────────────────▼───────────────────────────────────┐   │
-│   │           🗂️ Control Plane (src/control/plane.py)                │   │
-│   │   Versioned, append-only policy: breakers, suppressions,         │   │
-│   │   retry strategies, routing overrides. Every revision            │   │
-│   │   attributed; rollback derived from the revision, not hand-      │   │
-│   │   written per action type.                                       │   │
-│   └──────────────────────────────┬───────────────────────────────────┘   │
-│                                  │ read by the traffic source            │
-│   ┌──────────────────────────────▼───────────────────────────────────┐   │
-│   │   📝 Journal (src/store/) — transactions, patterns, actions,     │   │
-│   │   outcomes, revisions. Restart safety + incident replay.         │   │
-│   └──────────────────────────────────────────────────────────────────┘   │
-│                                                                          │
-│   ┌──────────────────────────────────────────────────────────────────┐   │
-│   │              🖥️ MCP Server (mcp_server.py)                       │   │
-│   │   • Same tools exposed via Model Context Protocol                │   │
-│   │   • Supports stdio transport for multi-process setups            │   │
-│   └──────────────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  source["Payment source\nSimulator or Razorpay test mode"] --> runtime["Flowstate runtime"]
+  runtime --> observe["Observe\nRates, issuers, decline codes"]
+  observe --> decide["Decide\nRank permitted responses"]
+  decide --> guardrails["Guardrails\nLimits, approval, holdout"]
+  guardrails --> control["Versioned control plane\nPolicy revision + audit record"]
+  control --> router["Checkout / routing client\nReads the current policy"]
+  router --> outcomes["Payment outcomes"]
+  outcomes --> measure["Measurement\nTreatment compared with holdout"]
+  measure --> runtime
+  runtime --> api["FastAPI read model"]
+  api --> desk["Next.js recovery desk"]
 ```
 
-### How the Gemini Agent Works
+The runtime never edits a payment provider directly. It publishes a versioned
+policy for an external routing client, making every action reversible and
+auditable. See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed design.
 
-1. **User submits a scenario** (e.g., *"ICICI Bank success rate dropped to 70%"*) via the Streamlit dashboard.
-2. **`adk_agent.py`** sends the scenario to **Gemini 2.5 Flash** along with all 7 tool function signatures.
-3. Gemini **reasons** about the situation and decides which tool(s) to call.
-4. The SDK **automatically dispatches** the function call to `payment_tools.py`.
-5. The tool executes the action through `PaymentExecutor` with full safety checks.
-6. The result flows back to Gemini, which provides a **natural language summary** of what it did and why.
-7. The dashboard displays reasoning, actions, and the **unified audit trail**.
+## Run locally
 
----
-
-## ✨ Key Features
-
-### 1. 🧠 LLM-Powered Autonomous Agent (Google Gemini 2.5 Flash)
-- Natural language understanding of complex payment failure scenarios
-- Autonomous reasoning and multi-step tool orchestration
-- Native function-calling — no prompt hacking or JSON parsing
-- Persistent reasoning display with unified state management
-
-### 2. 🔍 Real-Time Pattern Detection
-- Issuer degradation detection (e.g., HDFC Bank, ICICI Bank failures)
-- Retry storm identification and suppression
-- Payment method fatigue analysis
-- Latency spike detection
-- Multi-dimensional anomaly scoring
-
-### 3. 🎯 Context-Aware Decision Making
-- Multi-objective optimization (success rate, latency, cost, risk)
-- Hypothesis generation with confidence scoring
-- Trade-off analysis with full explainability
-
-### 4. 🛡️ Safety Guardrails (3 Authorization Levels)
-
-| Level | Actions | Human Approval |
-|-------|---------|----------------|
-| **AUTOMATIC** | Retry tuning, Alerts | ❌ Not required |
-| **SEMI-AUTO** | Circuit breaker, Routing | ⚡ Quick approval |
-| **MANUAL** | Method suppression | ✅ Required |
-
-The mapping lives in one place — `ACTION_AUTHORIZATION` in `src/models/state.py` —
-and every path that can create an action reads it: the autonomous loop, the LLM
-tool layer and the MCP server alike. Alongside the tiers, `SafetyGuardrails`
-enforces rate limits, a maximum blast radius, a concurrency cap and a minimum
-confidence before any intervention runs.
-
-An action the agent may not take alone is **queued, not skipped**. During an
-issuer outage the agent shifts traffic away on its own (low risk, reversible)
-and asks for the circuit breaker:
-
-```
-Executed unattended:
-   route_change      tier=semi_automatic  risk=low     approver=agent:auto_low_risk
-Queued for a human:
-   apr-0001  circuit_breaker on SBI  tier=semi_automatic  risk=medium  lapses in 571s
-```
-
-Requests **lapse** if nobody answers — they are never granted by default, because
-a tier that eventually approves itself is a delay rather than a control. Approving
-is a separate act from proposing: the agent fills this queue and never drains it,
-which is why the model is not given the approval tool.
-
-### 5. 🔄 Automatic Rollback
-If an action causes harm, the system automatically reverts it:
-- Success rate drops > 5% → Rollback
-- Latency increases > 50% → Rollback
-
-Interventions that simply reach the end of their planned duration are *retired*,
-not rolled back — they are recorded separately so that normal completions don't
-consume the rollback budget that gates future actions.
-
-### 6. 📖 Decision Explainability
-Every decision includes:
-- **Context**: What data triggered the analysis
-- **Reasoning**: Why this pattern is significant
-- **Options**: What actions were considered
-- **Decision**: What was chosen and why
-- **Expected Impact**: Predicted outcomes
-
-### 7. 📚 Continuous Learning — measured, not assumed
-When the agent intervenes it withholds a small share of the affected traffic
-(10% by default) as a **concurrent control group**, then compares the two arms
-*at the same time*, through the same outage:
-
-```
-exp-d4af0f90  circuit_breaker on AXIS_BANK
-  treatment: 367/406      control: 7/41
-  verdict  : improved success rate by 73.3%
-             (95% CI +61.5% to +85.2%, p=0.000, significant)
-```
-
-This matters because the obvious alternative — compare before with after — is
-confounded by everything else that changed, above all by the incident
-resolving on its own. In the run above, before/after reported **+6.5%** while
-the holdout measured **+70.1%**: an order of magnitude apart. The learner only
-adjusts its weights on outcomes attributed to a holdout *and* significant; an
-unmeasured before/after delta is recorded but never learned from.
-
-The cost is stated plainly: the holdout is real traffic knowingly left
-unprotected. That is the price of knowing whether the protection works, and
-`holdout_fraction: 0` in config turns it off — the agent still acts, it just
-stops finding out whether acting helped.
-
-### 7d. 📐 Statistical Detection
-Confidence is a posterior probability, not a score. The same observed 75%
-success rate yields P(degraded) of 12% / 73% / 100% for 4, 40 and 400
-observations, so thin evidence no longer looks like a crisis:
-
-```
-Success rate: 20.83% (baseline: 95.00%)
-Posterior estimate: 54.5% (95% CI 39.9%-68.8%)
-P(rate below baseline - 8%) = 100.0%
-Sequential detector alarmed (log-odds 12.9 > 6.9)
-```
-
-Alongside it, a sequential log-likelihood-ratio detector catches a rate that
-has *shifted* rather than a window that happens to look bad — measured at ~4%
-false alarms per 2000 healthy transactions, detecting a drop to 80% in ~74.
-
-### 7a. 🔁 Closed Control Loop
-The simulated payment world **reads the agent's control plane**. A circuit
-breaker reroutes traffic away from the affected issuer, a suppressed method
-stops being offered, a tightened retry limit reduces retry volume and a lowered
-timeout truncates latency. Because the world responds, the metrics the agent
-observes after acting reflect what it did — which is what makes rollback,
-outcome scoring and learning measure something real rather than noise.
-
-Run `pytest` to see this asserted end to end: an injected issuer outage drops
-the success rate, and the agent's own intervention brings it back up.
-
-### 7b. 🗂️ Versioned Control Plane
-Every intervention is a change to one versioned policy document, and nothing
-changes payment behaviour by any other route. Each revision records **who**
-changed it, **why**, and **which action** caused it, so "why is UPI suppressed
-right now" always has an answer:
-
-```
-r0 [system] initial empty policy
-r1 [agent]  circuit_breaker on HDFC_BANK
-              + circuit breaker: HDFC_BANK
-r2 [agent]  route_change on HDFC_BANK
-              + routing override: HDFC_BANK = {'reduce_routing_pct': 50}
-```
-
-Rollback is *derived* rather than hand-written: each action records the
-revision it produced, and undoing it diffs that revision against its parent and
-applies the inverse. The inverse lands on current state, so withdrawing one
-intervention leaves any other still running untouched.
-
-### 7c. 📝 Decision Journal & Replay
-`--journal` records transactions, patterns, actions, outcomes and every control
-plane revision to SQLite (standard library — no server to run). Two things this
-buys:
-
-- **Restart safety.** `open_interventions()` finds actions recorded as executed
-  but never completed, so a restarted agent knows what it left running instead
-  of losing track of live changes to payment routing.
-- **Evaluation.** A recorded incident can be re-run against changed code:
+Prerequisites: Python 3.11+, Node.js 20+, and pnpm.
 
 ```bash
-python main.py --mode demo --journal data/journal.db   # record
-python main.py --mode replay --journal data/journal.db # re-run it
-```
-
-Same transactions, same order, so any difference in what the agent does comes
-from the change rather than a fresh random draw.
-
-### 8. 🌐 MCP Server (Model Context Protocol)
-- All tools are also available as an MCP-compliant server (`mcp_server.py`)
-- Supports `stdio` transport for integration with external AI agents
-- Compatible with any MCP client (Claude Desktop, custom agents, etc.)
-
----
-
-## 📁 Project Structure
-
-```
-payment-agent-system/
-├── adk_agent.py                  # 🧠 Gemini 2.5 Flash agent (The Brain)
-├── payment_tools.py              # 🤚 Tool functions for Gemini (The Hands)
-├── mcp_server.py                 # 🌐 MCP server (tools via stdio)
-├── main.py                       # CLI demo runner
-├── src/
-│   ├── agent/
-│   │   ├── core.py               # Main agent orchestrator (OBSERVE→REASON→DECIDE→ACT→LEARN)
-│   │   ├── observer.py           # Data ingestion & sliding-window statistics
-│   │   ├── reasoner.py           # Pattern detection & hypothesis generation
-│   │   ├── decision_maker.py     # Multi-objective decision engine
-│   │   ├── executor.py           # Action execution with safety guardrails
-│   │   ├── incidents.py          # Collapses repeated detections into one incident
-│   │   ├── advisors.py           # Slow lane: written assessment, once per incident
-│   │   └── learner.py            # Reinforcement learning from outcomes
-│   ├── analysis/
-│   │   ├── statistics.py         # Bayesian rate estimation, z-tests, CUSUM
-│   │   ├── experiment.py         # Concurrent holdout experiments
-│   │   └── memory.py             # Incident recall by structured similarity
-│   ├── control/
-│   │   ├── plane.py              # Versioned policy document (the agent's only output)
-│   │   └── publish.py            # Publishes the policy; PolicyClient reads it
-│   ├── store/
-│   │   └── journal.py            # Append-only decision journal (SQLite)
-│   ├── traffic/
-│   │   ├── source.py             # TrafficSource interface + journal replay
-│   │   └── gateway.py            # Real PSP adapters (Razorpay, Stripe)
-│   ├── models/
-│   │   └── state.py              # Agent state, memory, data models & authorization tiers
-│   ├── safety/
-│   │   ├── guardrails.py         # Authorization tiers, rate limits & blast radius
-│   │   └── approvals.py          # Approval queue; unanswered requests lapse
-│   ├── simulation/
-│   │   └── payment_simulator.py  # Transaction & failure scenario simulation
-│   ├── factory.py                # Composition root: config -> wired objects
-│   └── utils/
-│       ├── settings.py           # Typed, validated configuration
-│       ├── stats.py              # Stdlib percentile/mean helpers
-│       ├── benchmark.py          # Performance benchmarking
-│       └── config_loader.py      # YAML configuration loader
-├── web/                          # Operations console — the primary UI
-│   ├── server.py                 # Stdlib http.server + SSE; no build step
-│   ├── index.html                # Console markup
-│   ├── styles.css                # Design tokens and layout
-│   └── app.js                    # Live updates, approvals, scenario injection
-├── api/
-│   └── main.py                   # FastAPI REST endpoints
-├── dashboard/
-│   ├── app.py                    # Streamlit dashboard (superseded by web/)
-│   ├── components.py             # Reusable UI components
-│   └── styles.py                 # Dark theme CSS
-├── config/
-│   ├── agent_config.yaml         # Agent behavior thresholds
-│   ├── safety_rules.yaml         # Safety guardrail configuration
-│   └── simulation_config.yaml    # Simulator parameters
-├── tests/                        # pytest suite; runs with no third-party deps
-├── data/
-│   ├── sample_payments.json      # Sample transaction data
-│   └── sample_payments.csv       # CSV format
-├── Dockerfile                    # Production container (Cloud Run ready)
-├── docker-compose.yml            # Multi-service local orchestration
-├── requirements.txt              # Python dependencies
-├── ARCHITECTURE.md               # Detailed technical architecture
-├── QUICKSTART.md                 # Getting started guide
-└── PERFORMANCE.md                # Benchmarks and metrics
-```
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Python 3.11+
-- Nothing else, for the console or the agent.
-- Optional: a [Google Gemini API key](https://aistudio.google.com/apikey), which
-  turns on the incident advisor. Without it the agent detects, decides and acts
-  identically — only the written assessment on each incident is missing.
-
-### Option 1: the operations console
-
-The console has no build step and no third-party dependencies. It runs the
-agent on a background thread and streams its state over SSE:
-
-```bash
-cd payment-agent-system
-python web/server.py            # → http://localhost:8080
-```
-
-That is the whole setup. Inject a failure from the console and watch the loop
-detect it, propose a response, queue what it may not do alone, and measure the
-result against a concurrent holdout.
-
-### Option 2: everything else
-
-```bash
-python -m venv venv
-.\venv\Scripts\activate        # Windows
-# source venv/bin/activate     # macOS/Linux
 pip install -r requirements.txt
-
-# Optional — enables the incident advisor
-set GEMINI_API_KEY=your_key_here          # Windows CMD
-# export GEMINI_API_KEY=your_key_here     # macOS/Linux
-
-# CLI demo (rule-based loop)
-python main.py --mode demo
-
-# REST API
 uvicorn api.main:app --reload
-
-# Streamlit dashboard (superseded by the console)
-streamlit run dashboard/app.py
 ```
 
-### Connecting it to something real
-
-Two seams, and nothing else, separate the demo from a deployment.
-
-**Real traffic in.** `PaymentGatewaySource` reads a live PSP:
-
-```python
-from src.traffic.gateway import HttpTransport, PaymentGatewaySource
-
-source = PaymentGatewaySource(
-    HttpTransport('https://api.razorpay.com', KEY_ID, KEY_SECRET),
-    provider='razorpay',        # or 'stripe'
-    merchant_id='acme',
-)
-agent.process_batch(source.next_batch(200))
-```
-
-A gateway cannot supply every signal the simulator can — a list-payments API
-does not report how long the processor took. The source says so through
-`signals()` rather than inventing a number, because a fabricated latency is
-indistinguishable from a real one downstream and the agent would end up
-measuring improvements in noise it generated itself. Supply the real thing with
-`WebhookLatency` if you receive webhooks.
-
-**Real decisions out.** The agent writes each revision to `control_plane.publish_path`;
-your checkout service reads it. The agent never calls your payment service, so
-an outage on either side degrades to "the last known policy stays in force":
-
-```python
-from src.control.publish import PolicyClient
-
-policy = PolicyClient('data/policy.json')
-
-def route(issuer, method):
-    policy.refresh()
-    if policy.is_broken(issuer):
-        return fallback_for(issuer)
-    if policy.is_suppressed(method):
-        return None
-    return apply(policy.routing_override(issuer))
-```
-
-`PolicyClient` keeps the last good policy when a read fails — a parse error is
-not evidence that no interventions are in force — and exposes `stale` so a dead
-agent is distinguishable from a quiet one.
-
-Honouring `holdout_fraction()` is what makes the measurement real rather than
-self-reported: the control group has to exist in the system actually routing
-payments.
-
-### Running the tests
-
-The agent core (`src/`, `payment_tools.py`) depends only on the standard
-library, so the suite runs without installing the dashboard or LLM stack:
+In a second terminal:
 
 ```bash
-pip install -r requirements-dev.txt
+cd frontend
+pnpm install
+pnpm dev
+```
+
+Open `http://localhost:3000`. The frontend proxies agent requests to
+`http://localhost:8000` by default.
+
+## Run with Docker
+
+```bash
+docker compose up --build
+```
+
+This starts the recovery desk on port `3000` and the API on port `8000`.
+Stop both with `docker compose down`.
+
+## API surface
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Service health |
+| `GET /snapshot` | Consistent operations read model |
+| `POST /demo/run` | Run the deterministic demonstration |
+| `POST /scenarios/inject` | Create a simulated payment incident |
+| `POST /approvals/{request_id}/approve` | Approve a queued action |
+| `POST /approvals/{request_id}/deny` | Reject a queued action |
+| `POST /sources/razorpay/test-mode` | Switch to read-only Razorpay test-mode intake |
+
+Interactive API documentation is available at `http://localhost:8000/docs`.
+
+## Razorpay test-mode intake
+
+Flowstate can ingest Razorpay test-mode payment records without sending a
+payment action to Razorpay. Set these variables on the API service, then call
+`POST /sources/razorpay/test-mode`:
+
+```text
+RAZORPAY_TEST_KEY_ID=rzp_test_...
+RAZORPAY_TEST_KEY_SECRET=...
+RAZORPAY_MERCHANT_ID=your-test-merchant
+```
+
+Docker Compose forwards these values from your local shell; do not place them
+in the repository. The browser never receives the credentials. Razorpay's
+payment list supplies status, decline code, and issuer data. It does not carry
+treatment/control attribution, so recovery measurement stays in the governed
+simulator until the production router returns those tags.
+
+## Repository map
+
+```text
+api/          FastAPI transport and lifecycle hooks
+config/       Agent, simulator, and safety configuration
+frontend/     Next.js product frontend
+src/          Agent loop, policies, analysis, simulation, and runtime
+tests/        Behavioural and documentation regression tests
+```
+
+## Verification
+
+```bash
 pytest
+cd frontend && pnpm build
+docker compose config --quiet
 ```
 
-### Option 3: Docker
-
-```bash
-# Start the console and the API
-docker-compose up --build
-
-# Access:
-# Console:  http://localhost:8080
-# API:      http://localhost:8000
-# API Docs: http://localhost:8000/docs
-
-# The Streamlit dashboard is kept behind a profile
-docker-compose --profile legacy up
-```
-
-### Option 4: Google Cloud Run
-
-```bash
-# Set your GCP project
-gcloud config set project YOUR_PROJECT_ID
-
-# Deploy (builds container automatically)
-gcloud run deploy payment-agent \
-  --source . \
-  --platform managed \
-  --region asia-south1 \
-  --allow-unauthenticated \
-  --set-env-vars GEMINI_API_KEY=YOUR_GEMINI_API_KEY
-```
-
----
-
-## 📊 Dashboard Features
-
-The Streamlit Command Center provides a unified real-time view of the entire payment system:
-
-| Panel | Description |
-|-------|-------------|
-| **🧠 Agentic Reasoning** | Deploy Gemini agent with custom scenarios; persisted results |
-| **💰 KPI Cards** | Success rate, latency, transactions, agent actions |
-| **🎯 Health Gauge** | Real-time system health score (0–100) |
-| **🧠 Explainability** | WHY patterns were detected, WHAT actions were taken |
-| **📈 Trend Charts** | Success rate & latency trends over time |
-| **🏦 Issuer Health** | Per-issuer success rates (color-coded bar chart) |
-| **🔍 Patterns** | Detected anomalies with severity & confidence |
-| **🛡️ Interventions** | Active agent interventions (unified with Gemini) |
-| **🛡️ Safety Guardrails** | Authorization levels, limits & rollback triggers |
-| **📜 Decision Log** | Unified audit trail with 🤖 Gemini-led tags |
-| **🔥 Scenario Injection** | Simulate issuer failures, retry storms, latency spikes |
-
----
-
-## 🔌 API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/status` | GET | Agent status & metrics |
-| `/cycle` | POST | Trigger analysis cycle |
-| `/transactions` | POST | Submit transactions for processing |
-| `/scenarios/inject` | POST | Inject failure scenario |
-| `/scenarios/clear` | DELETE | Clear active scenarios |
-| `/scenarios` | GET | List active scenarios |
-
----
-
-## ⚙️ Configuration
-
-### Agent Config (`config/agent_config.yaml`)
-```yaml
-thresholds:
-  success_rate:
-    warning: 0.90
-    critical: 0.80
-  latency:
-    warning: 500
-    critical: 1000
-```
-
-### Safety Rules (`config/safety_rules.yaml`)
-```yaml
-guardrails:
-  max_traffic_impact_percent: 15
-  max_actions_per_hour: 10
-  max_rollbacks_per_hour: 3
-authorization_levels:
-  automatic: [adjust_retry, send_alert]
-  semi_automatic: [circuit_breaker, route_change]
-  manual: [method_suppress]
-```
-
----
-
-## 📈 Performance
-
-| Metric | Value |
-|--------|-------|
-| Avg Cycle Time | ~50ms |
-| Throughput | ~850 txn/sec |
-| Pattern Detection | ~5ms |
-| Memory (Peak) | ~45 MB |
-
----
-
-## 🛡️ Why This is Truly Agentic
-
-| Agentic Trait | Implementation |
-|---------------|----------------|
-| **Autonomy** | Auto-executes low-risk actions; Gemini reasons and acts independently |
-| **State/Memory** | `AgentState`, `AgentMemory` — unified across UI and LLM |
-| **Goal-Directed** | Multi-objective optimization (success rate, latency, cost, risk) |
-| **Reasoning** | Gemini 2.5 Flash with structured hypothesis generation |
-| **Tool Use** | Native function-calling: circuit breakers, routing, retries, alerts |
-| **Learning** | Weight updates from action outcomes; strategy refinement |
-| **Explainability** | Full decision audit trail with 🤖 Gemini-tagged entries |
-| **Safety** | 3-tier authorization, automatic rollback, rate limiting |
-| **MCP Compliance** | Tools exposed via Model Context Protocol for interoperability |
-
----
-
-## 🧑‍💻 Technology Stack
-
-| Layer | Technology |
-|-------|------------|
-| **LLM Brain** | Google Gemini 2.5 Flash (via `google-genai` SDK) |
-| **Tool Protocol** | Model Context Protocol (MCP) with `FastMCP` |
-| **Agent Framework** | Custom OBSERVE→REASON→DECIDE→ACT→LEARN loop |
-| **Frontend** | Streamlit (real-time dark-themed dashboard) |
-| **REST API** | FastAPI with Pydantic validation |
-| **Visualization** | Plotly (interactive gauges, charts, bar graphs) |
-| **Containerization** | Docker + Docker Compose |
-| **Cloud Deployment** | Google Cloud Run |
-| **Language** | Python 3.11 |
-| **Configuration** | YAML |
-
----
-
-## 📄 Documentation
-
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Detailed technical architecture
-- [QUICKSTART.md](QUICKSTART.md) — Getting started guide
-- [PERFORMANCE.md](PERFORMANCE.md) — Benchmarks and metrics
-
----
-
-## 📝 License
-
-MIT License — See LICENSE file for details.
+The agent core does not depend on scientific-computing libraries. FastAPI and
+PyYAML support the service and configuration layers.

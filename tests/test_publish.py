@@ -15,6 +15,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -151,12 +152,25 @@ def test_a_reader_never_sees_a_half_written_document():
 
     def reader():
         while not stop.is_set():
-            try:
-                document = json.loads(path.read_text())
-                if not document.get('policy'):
-                    failures.append('empty policy observed')
-            except (ValueError, OSError) as exc:
-                failures.append(f'unreadable: {exc}')
+            # Windows can briefly deny a newly opened raw reader handle while
+            # an atomic replacement completes. PolicyClient preserves its last
+            # valid document in that case; this direct-reader check mirrors
+            # that contract instead of mistaking a lock collision for a
+            # malformed policy.
+            for attempt in range(5):
+                try:
+                    document = json.loads(path.read_text())
+                    if not document.get('policy'):
+                        failures.append('empty policy observed')
+                    break
+                except OSError as exc:
+                    if attempt == 4:
+                        failures.append(f'unreadable: {exc}')
+                    else:
+                        time.sleep(0.002 * (attempt + 1))
+                except ValueError as exc:
+                    failures.append(f'unreadable: {exc}')
+                    break
 
     thread = threading.Thread(target=reader, daemon=True)
     thread.start()

@@ -3,7 +3,9 @@ FastAPI REST API for Payment Agent System
 Provides programmatic access to agent functionality.
 """
 
+import os
 import sys
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -17,38 +19,42 @@ sys.path.insert(0, str(project_root))
 
 from src import views
 from src.agent.core import PaymentAgent
-from src.factory import build_agent, build_simulator, build_settings
 from src.models.state import PaymentMethod, PaymentStatus, PaymentTransaction
-from src.simulation.payment_simulator import PaymentSimulator
+from src.runtime import AgentRuntime
+
+
+runtime = AgentRuntime()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    runtime.start()
+    try:
+        yield
+    finally:
+        runtime.stop()
 
 # Initialize FastAPI app
 app = FastAPI(
     title="Payment Agent API",
-    description="REST API for the Agentic AI Payment Operations System",
-    version="1.0.0"
+    description="REST API for payment recovery operations.",
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-# Global agent and simulator instances
-agent: Optional[PaymentAgent] = None
-simulator: Optional[PaymentSimulator] = None
+def get_runtime() -> AgentRuntime:
+    """Return the single live runtime, starting it for direct module callers."""
+    if runtime.agent is None:
+        runtime.start()
+    return runtime
 
 
 def get_agent() -> PaymentAgent:
-    """Get or create agent instance."""
-    global agent
-    if agent is None:
-        agent = build_agent(build_settings())
-    return agent
+    return get_runtime().agent
 
 
-def get_simulator() -> PaymentSimulator:
-    """Get or create simulator instance."""
-    global simulator
-    if simulator is None:
-        # Bound to the agent's state so the simulated world responds to
-        # whatever the agent does to the control plane.
-        simulator = build_simulator(build_settings(), control_plane=get_agent().state)
-    return simulator
+def get_simulator():
+    return get_runtime().simulator
 
 
 # Request/Response Models
@@ -82,6 +88,11 @@ class ApprovalDecision(BaseModel):
     note: str = ""
 
 
+class RazorpayTestModeSettings(BaseModel):
+    """Optional labels for credentials held only in the service environment."""
+    merchant_id: Optional[str] = None
+
+
 class HealthResponse(BaseModel):
     """Health check response."""
     status: str
@@ -103,8 +114,9 @@ class StatusResponse(BaseModel):
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint."""
+    report = get_runtime().health()
     return HealthResponse(
-        status="healthy",
+        status="healthy" if report["loop_running"] else "degraded",
         timestamp=datetime.now().isoformat()
     )
 
@@ -130,15 +142,7 @@ async def get_status():
 @app.post("/cycle")
 async def run_cycle():
     """Trigger an agent analysis cycle."""
-    agent = get_agent()
-    simulator = get_simulator()
-    
-    # Generate some transactions first
-    transactions = simulator.generate_stream(count=25, start_time=datetime.now())
-    agent.process_batch(transactions)
-    
-    # Run cycle
-    results = agent.run_cycle()
+    results = get_runtime().run_once()
     
     return {
         "cycle": results['cycle'],
@@ -243,6 +247,42 @@ async def inject_scenario(scenario: ScenarioInput):
         raise HTTPException(status_code=400, detail=f"Unknown scenario type: {scenario.type}")
 
 
+@app.post("/demo/run")
+async def run_judge_demo():
+    """Reset the runtime into the repeatable ICICI recovery demonstration."""
+    snapshot = get_runtime().start_demo()
+    return {
+        "message": "Judge demo ready: ICICI degradation detected, route change measured, circuit breaker awaiting approval.",
+        "snapshot": snapshot,
+    }
+
+
+@app.post("/sources/razorpay/test-mode")
+async def connect_razorpay_test_mode(settings: RazorpayTestModeSettings):
+    """Read Razorpay test-mode payments without exposing credentials to clients."""
+    key_id = os.environ.get("RAZORPAY_TEST_KEY_ID")
+    key_secret = os.environ.get("RAZORPAY_TEST_KEY_SECRET")
+    if not key_id or not key_secret:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Set RAZORPAY_TEST_KEY_ID and RAZORPAY_TEST_KEY_SECRET on the API service. "
+                "The browser never sends or stores Razorpay credentials."
+            ),
+        )
+
+    snapshot = get_runtime().connect_razorpay_test_mode(
+        key_id=key_id,
+        key_secret=key_secret,
+        merchant_id=settings.merchant_id or os.environ.get("RAZORPAY_MERCHANT_ID", "razorpay-test-merchant"),
+        base_url=os.environ.get("RAZORPAY_API_BASE_URL", "https://api.razorpay.com"),
+    )
+    return {
+        "message": "Razorpay test-mode intake is active. Payments are read-only; recovery policies remain gated and published for an external router.",
+        "snapshot": snapshot,
+    }
+
+
 @app.delete("/scenarios/clear")
 async def clear_scenarios():
     """Clear all active failure scenarios."""
@@ -286,7 +326,7 @@ async def snapshot():
     from one cycle, control plane from the next - with no way for a reader to
     tell.
     """
-    return views.snapshot(get_agent(), get_simulator())
+    return get_runtime().snapshot()
 
 
 @app.get("/incidents")

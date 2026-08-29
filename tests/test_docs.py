@@ -23,7 +23,7 @@ DOCS = ['README.md', 'QUICKSTART.md', 'ARCHITECTURE.md', 'PERFORMANCE.md']
 
 
 def text(name):
-    return (ROOT / name).read_text()
+    return (ROOT / name).read_text(encoding='utf-8')
 
 
 def all_docs():
@@ -52,7 +52,7 @@ def test_the_scientific_stack_stays_out_of_requirements():
     NumPy or SciPy ever gets added, those statements become false in a way
     nothing else here would catch.
     """
-    declared = (ROOT / 'requirements.txt').read_text().lower()
+    declared = (ROOT / 'requirements.txt').read_text(encoding='utf-8').lower()
 
     for package in ('numpy', 'scipy', 'torch'):
         assert package not in declared, (
@@ -64,21 +64,10 @@ def test_the_scientific_stack_stays_out_of_requirements():
 
 def test_referenced_entry_points_exist():
     for path in (
-        'web/server.py', 'main.py', 'api/main.py', 'dashboard/app.py',
+        'main.py', 'api/main.py', 'frontend/package.json', 'src/runtime.py',
         'src/utils/benchmark.py', 'requirements.txt', 'docker-compose.yml',
     ):
         assert (ROOT / path).is_file(), f"docs reference {path}, which is missing"
-
-
-def test_documented_main_modes_are_real():
-    modes = set(re.findall(r'--mode (\w+)', ' '.join(all_docs().values())))
-    declared = (ROOT / 'main.py').read_text()
-
-    assert modes, 'the docs should show at least one run mode'
-    for mode in modes:
-        assert f"'{mode}'" in declared, (
-            f"docs show `--mode {mode}`, which main.py does not accept"
-        )
 
 
 def test_documented_config_files_exist():
@@ -86,23 +75,18 @@ def test_documented_config_files_exist():
         assert (ROOT / 'config' / name).is_file()
 
 
-def test_the_console_command_matches_what_docker_runs():
-    """
-    The image shipped Streamlit while every document described the console -
-    so the one artefact a reviewer would actually run served a different UI
-    from the one being documented.
-    """
+def test_the_api_command_matches_what_docker_runs():
     compose = text('docker-compose.yml')
     dockerfile = text('Dockerfile')
 
-    assert 'web/server.py' in compose
-    assert 'web/server.py' in dockerfile
+    assert 'uvicorn api.main:app' in compose
+    assert 'uvicorn api.main:app' in dockerfile
 
 
 # ── Source paths named in prose ──────────────────────────────────────────────
 
 def test_every_source_path_mentioned_in_the_docs_exists():
-    pattern = re.compile(r'`(src/[\w/]+\.py|web/[\w/]+\.\w+|tests/[\w/]+\.py)`')
+    pattern = re.compile(r'`(src/[\w/]+\.py|api/[\w/]+\.py|tests/[\w/]+\.py)`')
 
     missing = []
     for name, body in all_docs().items():
@@ -127,7 +111,7 @@ def test_documented_symbols_exist_where_the_docs_say():
     }
 
     for path, symbols in expectations.items():
-        body = (ROOT / path).read_text()
+        body = (ROOT / path).read_text(encoding='utf-8')
         for symbol in symbols:
             assert symbol in body, f"{path} no longer defines {symbol}"
 

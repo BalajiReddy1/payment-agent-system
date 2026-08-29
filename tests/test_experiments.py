@@ -311,6 +311,37 @@ def test_the_measurement_is_still_reported_while_it_is_thin():
     assert summary['control'] == {'successes': 0, 'total': 3}
 
 
+def test_recovery_value_is_only_claimable_with_a_supported_positive_result():
+    experiment = new_experiment()
+    for _ in range(95):
+        experiment.record('treatment', True, amount=100)
+    for _ in range(5):
+        experiment.record('treatment', False, amount=100)
+    for _ in range(60):
+        experiment.record('control', True, amount=100)
+    for _ in range(40):
+        experiment.record('control', False, amount=100)
+
+    recovery = experiment.summary()['recovery']
+
+    assert recovery['currency'] == 'INR'
+    assert recovery['at_risk'] == 4000
+    assert recovery['recovered'] == 3500
+    assert recovery['claimable']
+
+
+def test_seeded_simulator_ids_keep_holdout_assignment_replayable():
+    first = PaymentSimulator()
+    second = PaymentSimulator()
+    first.set_deterministic_ids('judge-demo')
+    second.set_deterministic_ids('judge-demo')
+
+    first_ids = [transaction.transaction_id for transaction in first.generate_stream(5)]
+    second_ids = [transaction.transaction_id for transaction in second.generate_stream(5)]
+
+    assert first_ids == second_ids
+
+
 def test_a_well_powered_experiment_is_announced_as_significant():
     experiment = fill(new_experiment(), treatment=(95, 100), control=(60, 100))
     summary = experiment.summary()

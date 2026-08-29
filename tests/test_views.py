@@ -1,11 +1,9 @@
 """
 Read models.
 
-web/server.py claimed "the same endpoints exist on the FastAPI app in
-api/main.py" while the API had no approvals, no incidents, no experiments and
-no control plane. The claim is now true because both surfaces call these
-functions - so what has to be tested is the shape itself, once, without
-standing up either server.
+The API serves these pure functions through the shared runtime. The model is
+tested without an HTTP server so a presentation change cannot silently alter
+the payment-recovery data contract.
 """
 
 from datetime import datetime
@@ -197,26 +195,15 @@ def test_health_reports_whether_the_advisor_is_wired():
     assert views.health(agent)['advisor'] is True
 
 
-# ── The drift guard ──────────────────────────────────────────────────────────
+# ── Runtime boundary ─────────────────────────────────────────────────────────
 
-def test_console_serves_exactly_the_shared_read_model():
-    """
-    The console used to build this document itself. If it starts doing so
-    again, the API silently becomes a worse view of the same agent - which is
-    the state this module exists to end.
-    """
+def test_runtime_uses_the_shared_read_model():
     import inspect
-    import sys
-    from pathlib import Path
 
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'web'))
-    import server
+    from src.runtime import AgentRuntime
 
-    source = inspect.getsource(server.AgentRunner.snapshot)
+    source = inspect.getsource(AgentRuntime.snapshot)
     assert 'views.snapshot' in source
-    assert 'control_plane' not in source, 'the console is assembling its own view again'
-
-    assert 'views.health' in inspect.getsource(server.AgentRunner.health)
 
 
 # ── Inherited interventions ──────────────────────────────────────────────────

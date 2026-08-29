@@ -1,51 +1,18 @@
-version: '3.8'
-
 services:
-  # Operations console — the UI. Standard library only, so it comes up even
-  # when every optional dependency is missing.
-  console:
-    build: .
-    container_name: payment-console
+  # Product frontend — proxies requests to the API so browsers never need CORS configuration.
+  frontend:
+    build: ./frontend
+    container_name: payment-frontend
     ports:
-      - "8080:8080"
-    command: python web/server.py 8080
+      - "3000:3000"
     environment:
-      - PYTHONPATH=/app
-      # Optional: enables the incident advisor. Without it the agent detects,
-      # decides and acts exactly the same, just without written commentary.
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-    volumes:
-      - ./config:/app/config:ro
+      - AGENT_API_URL=http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
     restart: unless-stopped
-    healthcheck:
-      # /health reports 503 when the agent's cycle thread has died, so a
-      # container that serves pages but has stopped thinking is not "healthy".
-      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
-  # Streamlit dashboard — the original UI, kept for comparison.
-  dashboard:
-    build: .
-    container_name: payment-dashboard
-    ports:
-      - "8501:8501"
-    command: streamlit run dashboard/app.py --server.port=8501 --server.address=0.0.0.0
-    environment:
-      - PYTHONPATH=/app
-    profiles:
-      - legacy # Only runs when: docker-compose --profile legacy up
-    volumes:
-      - ./config:/app/config:ro
-    restart: unless-stopped
-    healthcheck:
-      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # FastAPI REST API
+  # FastAPI owns the payment-agent loop and its read model.
   api:
     build: .
     container_name: payment-api
@@ -54,6 +21,12 @@ services:
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     environment:
       - PYTHONPATH=/app
+      # Optional: forwarded from the local shell for the read-only Razorpay test-mode source.
+      # Do not commit credentials or expose them to the frontend.
+      - RAZORPAY_TEST_KEY_ID
+      - RAZORPAY_TEST_KEY_SECRET
+      - RAZORPAY_MERCHANT_ID
+      - RAZORPAY_API_BASE_URL
     volumes:
       - ./config:/app/config:ro
     restart: unless-stopped
@@ -62,15 +35,3 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-  # Agent Demo (optional - for running demos)
-  agent:
-    build: .
-    container_name: payment-agent
-    command: python main.py --mode demo
-    environment:
-      - PYTHONPATH=/app
-    profiles:
-      - demo # Only runs when: docker-compose --profile demo up
-    volumes:
-      - ./config:/app/config:ro

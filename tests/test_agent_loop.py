@@ -1,7 +1,7 @@
 """
 Whole-loop accounting.
 
-The counters the dashboard and API report have to mean what they say: patterns
+The counters the API reports have to mean what they say: patterns
 must actually be counted, alerts must not be filed as interventions, and the
 learn phase must receive outcomes rather than sitting permanently empty.
 """

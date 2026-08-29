@@ -5,7 +5,7 @@ Uses Gemini 2.5 Flash via the google-genai SDK with native Python function-calli
 No MCP subprocess, no asyncio — fully synchronous and Cloud Run compatible.
 
 The SDK import is deliberately deferred into analyze_and_act(). This module is
-imported by the dashboard, and the dashboard's job — showing what the agent
+imported by an application surface, whose job — showing what the agent
 detected and did — needs no LLM at all. Importing google.genai at module scope
 meant a missing optional package took the entire UI down with a
 ModuleNotFoundError, for a capability that page never used.
@@ -37,7 +37,7 @@ Rules:
 def analyze_and_act(metrics_summary: str) -> Dict[str, Any]:
     """
     Send a metrics summary to Gemini, let it reason and call tools directly.
-    Fully synchronous — safe to call from Streamlit on Cloud Run.
+    Fully synchronous — safe to call from a server-side application surface.
 
     Args:
         metrics_summary: A plain-text description of the current payment situation.
@@ -52,7 +52,7 @@ def analyze_and_act(metrics_summary: str) -> Dict[str, Any]:
     """
 
     # 1. Initialize Gemini client. Imported here, not at module scope, so the
-    #    dashboard can start without the SDK present.
+    #    application can start without the SDK present.
     try:
         from google import genai
         from google.genai import types

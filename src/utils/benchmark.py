@@ -21,7 +21,6 @@ import contextlib
 import gc
 import io
 import logging
-import resource
 import statistics
 import sys
 import time
@@ -32,6 +31,11 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.factory import build_system  # noqa: E402
+
+try:
+    import resource
+except ImportError:  # Windows does not ship POSIX resource.getrusage.
+    resource = None
 
 PHASES = ('observe', 'reason', 'decide_act', 'monitor', 'learn', 'baselines')
 
@@ -44,9 +48,40 @@ def peak_rss_mb() -> float:
     documented 30-60 MB and made the two look unrelated. RSS is the number that
     decides whether this fits in a container.
     """
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    # Linux reports kilobytes, macOS bytes.
-    return peak / 1024.0 if sys.platform.startswith('linux') else peak / (1024.0 ** 2)
+    if resource is not None:
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # Linux reports kilobytes, macOS bytes.
+        return peak / 1024.0 if sys.platform.startswith('linux') else peak / (1024.0 ** 2)
+
+    if sys.platform == 'win32':
+        import ctypes
+        from ctypes import wintypes
+
+        class ProcessMemoryCounters(ctypes.Structure):
+            _fields_ = [
+                ('cb', wintypes.DWORD),
+                ('PageFaultCount', wintypes.DWORD),
+                ('PeakWorkingSetSize', ctypes.c_size_t),
+                ('WorkingSetSize', ctypes.c_size_t),
+                ('QuotaPeakPagedPoolUsage', ctypes.c_size_t),
+                ('QuotaPagedPoolUsage', ctypes.c_size_t),
+                ('QuotaPeakNonPagedPoolUsage', ctypes.c_size_t),
+                ('QuotaNonPagedPoolUsage', ctypes.c_size_t),
+                ('PagefileUsage', ctypes.c_size_t),
+                ('PeakPagefileUsage', ctypes.c_size_t),
+            ]
+
+        counters = ProcessMemoryCounters()
+        counters.cb = ctypes.sizeof(counters)
+        ok = ctypes.windll.psapi.GetProcessMemoryInfo(
+            ctypes.windll.kernel32.GetCurrentProcess(),
+            ctypes.byref(counters),
+            counters.cb,
+        )
+        if ok:
+            return counters.PeakWorkingSetSize / (1024.0 ** 2)
+
+    return 0.0
 
 
 def run_benchmark(cycles: int = 30, batch: int = 250, quiet: bool = True):

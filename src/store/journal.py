@@ -170,7 +170,7 @@ class SQLiteJournal:
         self._connection = sqlite3.connect(str(self.path), check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
 
-        # WAL keeps readers (a dashboard, a replay) from blocking the writer.
+        # WAL keeps readers (an API client or replay) from blocking the writer.
         self._connection.execute("PRAGMA journal_mode=WAL")
         self._connection.execute("PRAGMA synchronous=NORMAL")
         self._connection.executescript(SCHEMA)

@@ -7,6 +7,12 @@ venv/
 env/
 ENV/
 
+# The backend image does not serve the Next.js application.
+frontend/
+node_modules/
+.pnpm-store/
+.pytest_cache/
+
 # Python cache
 __pycache__/
 *.py[cod]

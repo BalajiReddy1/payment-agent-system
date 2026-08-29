@@ -49,6 +49,36 @@ class ArmCounts:
 
 
 @dataclass
+class ArmValue:
+    """Value observed in one experiment arm.
+
+    A higher approval rate is useful only insofar as it represents payments
+    that would otherwise have been lost. Keep this separately from counts so
+    the existing statistical comparison remains a comparison of independent
+    payment outcomes, while the product can report the monetary consequence.
+    """
+
+    successful: float = 0.0
+    total: float = 0.0
+
+    def record(self, success: bool, amount: float) -> None:
+        amount = max(0.0, float(amount or 0.0))
+        self.total += amount
+        if success:
+            self.successful += amount
+
+    @property
+    def success_rate(self) -> float:
+        return self.successful / self.total if self.total else 0.0
+
+    def summary(self) -> Dict[str, float]:
+        return {
+            'successful': round(self.successful, 2),
+            'total': round(self.total, 2),
+        }
+
+
+@dataclass
 class Experiment:
     """
     One intervention, measured against a concurrent holdout.
@@ -67,6 +97,9 @@ class Experiment:
 
     treatment: ArmCounts = field(default_factory=ArmCounts)
     control: ArmCounts = field(default_factory=ArmCounts)
+    treatment_value: ArmValue = field(default_factory=ArmValue)
+    control_value: ArmValue = field(default_factory=ArmValue)
+    currency: str = 'INR'
 
     @property
     def active(self) -> bool:
@@ -76,11 +109,25 @@ class Experiment:
     def observations(self) -> int:
         return self.treatment.total + self.control.total
 
-    def record(self, arm: str, success: bool):
+    def record(
+        self,
+        arm: str,
+        success: bool,
+        amount: float = 0.0,
+        currency: str = 'INR',
+    ):
         if arm == TREATMENT:
             self.treatment.record(success)
+            self.treatment_value.record(success, amount)
         elif arm == CONTROL:
             self.control.record(success)
+            self.control_value.record(success, amount)
+
+        # The recovery desk currently scopes one experiment to one currency.
+        # Preserve the source currency instead of silently labelling every
+        # gateway record as INR.
+        if currency:
+            self.currency = currency
 
     def has_sufficient_data(self, min_per_arm: int = 30) -> bool:
         """
@@ -119,6 +166,7 @@ class Experiment:
         """
         result = self.result()
         sufficient = self.has_sufficient_data()
+        recovery = self.recovery_summary(result, sufficient)
         return {
             'experiment_id': self.experiment_id,
             'action_id': self.action_id,
@@ -134,6 +182,36 @@ class Experiment:
             'p_value': result.p_value if result else None,
             'significant': bool(result and result.significant and sufficient),
             'verdict': self._verdict(result, sufficient),
+            'recovery': recovery,
+        }
+
+    def recovery_summary(
+        self,
+        result: Optional[ComparisonResult],
+        sufficient: bool,
+    ) -> Dict:
+        """Estimate payment value retained by treatment versus control.
+
+        The control arm tells us how much of the treatment value would have
+        succeeded without the intervention. The positive difference is the
+        value recovered by the response. It remains an estimate until both
+        arms are adequately sampled and the outcome test is significant.
+        """
+        control_rate = self.control_value.success_rate
+        expected_without_treatment = self.treatment_value.total * control_rate
+        at_risk = max(0.0, self.treatment_value.total - expected_without_treatment)
+        recovered = max(0.0, self.treatment_value.successful - expected_without_treatment)
+        claimable = bool(
+            result and result.significant and sufficient and recovered > 0
+        )
+
+        return {
+            'currency': self.currency,
+            'treatment': self.treatment_value.summary(),
+            'control': self.control_value.summary(),
+            'at_risk': round(at_risk, 2),
+            'recovered': round(recovered, 2),
+            'claimable': claimable,
         }
 
     @staticmethod
@@ -255,7 +333,12 @@ class ExperimentRegistry:
             return False
 
         from src.models.state import PaymentStatus
-        experiment.record(arm, transaction.status == PaymentStatus.SUCCESS)
+        experiment.record(
+            arm,
+            transaction.status == PaymentStatus.SUCCESS,
+            amount=getattr(transaction, 'amount', 0.0),
+            currency=getattr(transaction, 'currency', 'INR'),
+        )
         return True
 
     def record_batch(self, transactions) -> int:

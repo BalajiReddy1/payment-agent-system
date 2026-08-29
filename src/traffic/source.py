@@ -51,7 +51,7 @@ class TrafficSource(Protocol):
         ...
 
     def describe(self) -> str:
-        """Human-readable identification, for logs and the dashboard."""
+        """Human-readable identification for logs and API clients."""
         ...
 
 

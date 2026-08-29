@@ -1,11 +1,8 @@
 """
 Read models.
 
-The shapes the console and the REST API both serve. They live here, not in
-either server, because they were about to be written twice: web/server.py
-claimed "the same endpoints exist on the FastAPI app in api/main.py" while the
-API had no approvals, no incidents, no experiments and no control plane. A
-second copy would have drifted from the first within a release.
+The shapes the REST API serves. They live outside the HTTP layer so a runtime
+cycle and an API response cannot develop separate versions of the same state.
 
 Everything here is a pure function of an agent (and optionally a simulator).
 No HTTP, no threads, no formatting - so the shape a client depends on can be

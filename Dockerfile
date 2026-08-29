@@ -15,11 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Cloud Run sets the PORT environment variable (usually 8080)
+# Cloud Run sets the PORT environment variable (usually 8080).
 ENV PORT=8080
 EXPOSE 8080
 
-# Run the operations console. It binds 0.0.0.0 itself and is built on
-# http.server from the standard library, so the image serves the UI even if
-# every optional dependency above failed to install.
-CMD ["sh", "-c", "python web/server.py ${PORT}"]
+# The API owns the agent lifecycle and serves the Next.js frontend through its proxy.
+CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT}"]

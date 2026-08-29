@@ -94,6 +94,23 @@ class PaymentSimulator:
         
         # Transaction counter
         self.transaction_count = 0
+        self._deterministic_id_prefix: Optional[str] = None
+
+    def set_deterministic_ids(self, prefix: Optional[str]) -> None:
+        """Use stable transaction ids when a scenario must be replayable.
+
+        Experiment-arm assignment is a hash of the transaction id. Random
+        UUIDs are right for ordinary simulated traffic, but make a scripted
+        demo's treatment/control split change on every run. A caller that
+        needs reproducible evidence can supply a prefix; ``None`` restores
+        normal UUID generation.
+        """
+        self._deterministic_id_prefix = prefix
+
+    def _transaction_id(self, kind: str = "payment") -> str:
+        if self._deterministic_id_prefix:
+            return f"{self._deterministic_id_prefix}-{kind}-{self.transaction_count:08d}"
+        return str(uuid4())
     
     def generate_transaction(
         self,
@@ -105,7 +122,7 @@ class PaymentSimulator:
             timestamp = datetime.now()
         
         self.transaction_count += 1
-        transaction_id = str(uuid4())
+        transaction_id = self._transaction_id()
 
         # Select payment method (weighted random), honouring suppressions
         methods, weights = zip(*self.payment_methods)
@@ -167,7 +184,7 @@ class PaymentSimulator:
             latency_ms=latency_ms,
             retry_count=retry_count,
             is_retry=is_retry,
-            original_transaction_id=str(uuid4()) if is_retry else None,
+            original_transaction_id=self._transaction_id("retry") if is_retry else None,
             region=region,
             processor='rerouted' if rerouted else 'default',
             experiment_target=experiment_target,

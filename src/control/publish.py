@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -150,7 +151,18 @@ class PolicyPublisher:
                 file.write(content)
                 file.flush()
                 os.fsync(file.fileno())
-            os.replace(temporary, self.path)
+            # Windows does not permit replacement while a reader still has a
+            # handle open. Readers of this document are expected to poll it,
+            # so retrying the atomic rename is safer than falling back to an
+            # in-place write (which could publish a truncated policy).
+            for attempt in range(25):
+                try:
+                    os.replace(temporary, self.path)
+                    break
+                except PermissionError:
+                    if attempt == 24:
+                        raise
+                    time.sleep(0.002 * (attempt + 1))
         except BaseException:
             Path(temporary).unlink(missing_ok=True)
             raise
