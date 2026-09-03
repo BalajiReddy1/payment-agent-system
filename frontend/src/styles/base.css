@@ -1,0 +1,502 @@
+/* Base layer: reset, page frame, and the primitives shared by every surface. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--t-body);
+  line-height: 1.6;
+  font-synthesis-weight: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 500;
+  letter-spacing: -0.028em;
+  line-height: 1.02;
+  text-wrap: balance;
+}
+
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+a {
+  color: inherit;
+  font: inherit;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: progress;
+  opacity: 0.5;
+}
+
+svg {
+  display: block;
+}
+
+img,
+canvas,
+video {
+  max-width: 100%;
+  height: auto;
+}
+
+:focus-visible {
+  outline: 2px solid var(--proof);
+  outline-offset: 3px;
+  border-radius: var(--r-1);
+}
+
+::selection {
+  background: var(--signal);
+  color: var(--on-fill);
+}
+
+/* ---------- Layout helpers ---------- */
+
+.shell {
+  width: min(100% - (var(--gutter) * 2), var(--shell));
+  margin-inline: auto;
+}
+
+.shell-tight {
+  width: min(100% - (var(--gutter) * 2), var(--shell-tight));
+  margin-inline: auto;
+}
+
+.rule {
+  height: 1px;
+  border: 0;
+  margin: 0;
+  background: var(--line-soft);
+}
+
+/* ---------- Typographic primitives ---------- */
+
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1, "zero" 1;
+  letter-spacing: -0.02em;
+}
+
+/* One deliberate kicker style, used sparingly. Not section grammar. */
+.kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+
+.lead {
+  max-width: 56ch;
+  color: var(--ink-3);
+  font-size: var(--t-lead);
+  line-height: 1.62;
+}
+
+.prose {
+  max-width: var(--measure);
+  color: var(--ink-3);
+  line-height: 1.7;
+}
+
+/* ---------- Status ---------- */
+
+.dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: var(--r-round);
+  background: var(--ink-4);
+}
+
+.dot[data-tone="signal"] {
+  background: var(--signal);
+  animation: pulse 2.4s var(--e-in-out) infinite;
+}
+
+.dot[data-tone="proof"] {
+  background: var(--proof);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--signal-edge);
+  }
+  60% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.tag[data-tone="signal"] {
+  border-color: var(--signal-edge);
+  background: var(--signal-wash);
+  color: var(--signal-hi);
+}
+
+.tag[data-tone="proof"] {
+  border-color: var(--proof-edge);
+  background: var(--proof-wash);
+  color: var(--proof);
+}
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  --btn-bg: transparent;
+  --btn-fg: var(--ink);
+  --btn-edge: var(--line);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  min-height: 44px;
+  padding: 0 1.05rem;
+  border: 1px solid var(--btn-edge);
+  border-radius: var(--r-2);
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  font-size: var(--t-small);
+  font-weight: 600;
+  letter-spacing: -0.008em;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  isolation: isolate;
+  transition:
+    color var(--d-1) var(--e-out),
+    border-color var(--d-2) var(--e-out),
+    background var(--d-2) var(--e-out),
+    transform var(--d-2) var(--e-out);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn .glyph {
+  transition: transform var(--d-2) var(--e-out);
+}
+
+.btn:hover .glyph {
+  transform: translateX(3px);
+}
+
+.btn[data-variant="solid"] {
+  --btn-bg: var(--signal);
+  --btn-fg: var(--on-fill);
+  --btn-edge: var(--signal);
+}
+
+/* The shimmer is a single slow sweep on hover, not an idle loop. */
+.btn[data-variant="solid"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(100deg, transparent 35%, oklch(1 0 0 / 0.32) 50%, transparent 65%);
+  transform: translateX(-110%);
+  transition: transform 620ms var(--e-out-quart);
+}
+
+.btn[data-variant="solid"]:hover::after {
+  transform: translateX(110%);
+}
+
+.btn[data-variant="solid"]:hover {
+  --btn-bg: var(--signal-hi);
+  --btn-edge: var(--signal-hi);
+}
+
+.btn[data-variant="proof"] {
+  --btn-bg: var(--proof);
+  --btn-fg: var(--on-fill);
+  --btn-edge: var(--proof);
+}
+
+.btn[data-variant="outline"]:hover {
+  --btn-edge: var(--ink-4);
+  --btn-bg: var(--bg-lift);
+}
+
+.btn[data-variant="ghost"] {
+  --btn-edge: transparent;
+  padding-inline: 0.4rem;
+  color: var(--ink-2);
+}
+
+.btn[data-variant="ghost"]:hover {
+  color: var(--ink);
+}
+
+.btn[data-size="sm"] {
+  min-height: 34px;
+  padding-inline: 0.7rem;
+  font-size: var(--t-micro);
+}
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  background: transparent;
+  color: var(--ink-3);
+  transition:
+    color var(--d-1) var(--e-out),
+    border-color var(--d-2) var(--e-out),
+    background var(--d-2) var(--e-out);
+}
+
+.icon-btn:hover {
+  border-color: var(--ink-4);
+  background: var(--bg-lift);
+  color: var(--ink);
+}
+
+/* Underline that draws from the leading edge. */
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--ink);
+  font-size: var(--t-small);
+  font-weight: 600;
+  text-decoration: none;
+  background-image: linear-gradient(currentColor, currentColor);
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 0 1px;
+  transition:
+    background-size var(--d-3) var(--e-out),
+    color var(--d-1) var(--e-out);
+}
+
+.link:hover {
+  color: var(--signal-hi);
+  background-size: 100% 1px;
+}
+
+.link .glyph {
+  transition: transform var(--d-2) var(--e-out);
+}
+
+.link:hover .glyph {
+  transform: translateX(3px);
+}
+
+/* ---------- Brand mark ---------- */
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  text-decoration: none;
+}
+
+.wordmark svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+.wordmark .mark-signal {
+  transform-origin: left center;
+  animation: mark-breathe 4.5s var(--e-in-out) infinite;
+}
+
+@keyframes mark-breathe {
+  0%,
+  100% {
+    transform: scaleX(0.45);
+  }
+  55% {
+    transform: scaleX(1);
+  }
+}
+
+/* ---------- Reveal ---------- */
+
+/*
+  Two mechanisms, both fail-safe.
+
+  `data-enter` is a pure CSS animation for anything visible on first paint. It
+  starts hidden and always finishes visible, with no JavaScript involved.
+
+  `data-reveal` is the scroll-triggered variant. RevealRoot only ever adds
+  `data-pending` to an element that is currently below the fold, so content is
+  visible by default and stays visible if scripting never runs.
+*/
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-enter] {
+    animation-duration: var(--d-4);
+    animation-timing-function: var(--e-out);
+    animation-fill-mode: both;
+    animation-delay: var(--reveal-delay, 0ms);
+  }
+
+  [data-enter="up"] {
+    animation-name: enter-up;
+  }
+
+  [data-enter="in"] {
+    animation-name: enter-in;
+  }
+}
+
+@keyframes enter-up {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0);
+  }
+}
+
+@keyframes enter-in {
+  from {
+    opacity: 0;
+    filter: blur(7px);
+  }
+}
+
+[data-reveal] {
+  transition:
+    opacity var(--d-4) var(--e-out),
+    transform var(--d-4) var(--e-out),
+    filter var(--d-4) var(--e-out);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+
+[data-reveal]:not([data-reveal="bar"])[data-pending] {
+  opacity: 0;
+}
+
+[data-reveal="up"][data-pending] {
+  transform: translate3d(0, 22px, 0);
+}
+
+[data-reveal="in"][data-pending] {
+  filter: blur(6px);
+}
+
+[data-reveal="side"][data-pending] {
+  transform: translate3d(-18px, 0, 0);
+}
+
+/* Bars grow from the leading edge rather than fading in. */
+[data-reveal="bar"] i {
+  transform-origin: left;
+  transition: transform 950ms var(--e-out);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+
+[data-reveal="bar"][data-pending] i {
+  transform: scaleX(0);
+}
+
+/* ---------- Skip link ---------- */
+
+.skip {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: var(--z-toast);
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--r-2);
+  background: var(--proof);
+  color: var(--on-fill);
+  font-size: var(--t-small);
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-160%);
+  transition: transform var(--d-2) var(--e-out);
+}
+
+.skip:focus-visible {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Visually hidden, still announced. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

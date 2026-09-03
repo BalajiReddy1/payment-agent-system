@@ -22,7 +22,14 @@ export type Experiment = {
 };
 
 export type AgentSnapshot = {
-  agent: { active: boolean; cycle: number; phase: string; window_minutes: number };
+  agent: {
+    active: boolean;
+    cycle: number;
+    phase: string;
+    window_minutes: number;
+    advisor: boolean;
+    advisor_model: string | null;
+  };
   metrics: {
     success_rate: number;
     latency: { p50: number; p95: number; p99: number; mean: number; max: number };
@@ -40,6 +47,7 @@ export type AgentSnapshot = {
     latest_confidence: number;
     actions_taken: string[];
     advice?: string | null;
+    advice_unavailable?: string | null;
   }>;
   approvals: Array<{
     request_id: string;
