@@ -112,8 +112,15 @@ raise the wait in `capture/record.mjs` and re-record that shot.
 
 ## Unused footage
 
-`03-problem`, `05-guardrails`, `07-revision` and `09-onboarding` are not in the
-three minute cut. They are there if you want a longer version, and for stills.
+`03-problem`, `05-guardrails`, `09-onboarding` and `14-desk-receipt` are not in
+the three minute cut. They are there if you want a longer version, and for
+stills.
+
+`14-desk-receipt` is the desk's own receipt panel, including the assessment.
+It is worth swapping back in for the `receipt` beat once the advisor has quota,
+because it shows a model-written assessment attributed on screen. Until then
+the beat uses `07-revision`, the rendered policy revision on the home page,
+which carries the same line without a quota notice in frame.
 
 ## The advisor in the footage
 

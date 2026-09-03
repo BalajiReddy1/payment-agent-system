@@ -91,6 +91,9 @@ async function drift(page, pixels, ms) {
 
 /* Jump without animation, for the start of a shot. */
 async function place(page, selector, offset = 90) {
+  // The desk paints from its first snapshot fetch, so wait for the target
+  // rather than assuming a fixed sleep outran the network.
+  await page.waitForSelector(selector, { timeout: 25_000 });
   const y = await topOf(page, selector, offset);
   await page.evaluate((to) => {
     window.scrollTo({ top: to, behavior: "instant" });
@@ -312,7 +315,7 @@ const SHOTS = [
     path: "/",
     scale: 1.4,
     setup: (page) => place(page, ".revision", 180),
-    play: async (page) => wait(4500),
+    play: async (page) => wait(12_000),
   },
   {
     name: "08-planes",
@@ -407,11 +410,13 @@ const SHOTS = [
     name: "14-desk-receipt",
     path: "/desk",
     lead: 1200,
-    setup: (page) => asConfigured(page, (p) => place(p, "#record", 120)),
+    // Framed on the revision log rather than the receipt header: the narration
+    // over this shot is about the signed revision, and that is what it shows.
+    setup: (page) => asConfigured(page, (p) => place(p, ".revisions", 150)),
     play: async (page) => {
-      await wait(2000);
-      await glide(page, await topOf(page, ".revisions", 260), 2200);
-      await wait(8000);
+      await wait(6000);
+      await drift(page, 110, 4500);
+      await wait(3000);
     },
   },
 ];

@@ -56,7 +56,9 @@ const TIMELINE = [
   { id: "approve", seconds: 20, clip: "11-desk-decision", from: 1.0, beat: "G. The human boundary" },
   { id: "measure", seconds: 20, clip: "12-desk-measure", from: 0.5, beat: "H. The proof" },
   { id: "claim", seconds: 10, clip: "06-proof", from: 3.0, beat: "H. The proof" },
-  { id: "receipt", seconds: 7, clip: "14-desk-receipt", from: 1.0, beat: "I. Credibility" },
+  // The rendered policy revision, rather than the desk's receipt panel: this
+  // beat is about the signed revision and this shot is only that.
+  { id: "receipt", seconds: 7, clip: "07-revision", from: 1.0, beat: "I. Credibility" },
   { id: "planes", seconds: 6, clip: "08-planes", from: 4.0, beat: "I. Credibility" },
   { id: "close", seconds: 18, clip: "02-scope", from: 28.0, fade: "out", beat: "J. Close" },
 ];
