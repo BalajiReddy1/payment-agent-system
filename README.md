@@ -28,9 +28,6 @@ reproducible for a review or recorded walkthrough.
 Setup is stored in the browser only. The desk runs on its own defaults if you
 skip it.
 
-The pitch script is in [PRESENTATION.md](PRESENTATION.md), and the tooling that
-records the product footage and cuts the video is in [demo/](demo/).
-
 ## The two lanes
 
 The deterministic lane detects, ranks and acts. It owns every decision that can
