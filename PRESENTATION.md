@@ -30,144 +30,130 @@ at a normal pace, so you are not being rushed anywhere.
 
 ---
 
-## A. 0:05 — The scene
+## A. 0:05 — The hook
 
-*Payments scroll past. A few of them are orange.*
+*Payments scrolling past. A few of them turn orange.*
 
-> **It is the middle of a sale. Customers are reaching checkout, tapping pay,
-> and one bank has quietly started declining them. There is no single big
-> alarm. There are just a few hundred small losses.**
+> **It's the middle of a big sale. People are at checkout, tapping pay. And one
+> bank has quietly started saying no. Nothing breaks. No alarm goes off. You
+> just lose a few hundred customers, one at a time.**
 
-Slow. This is the only place in the film you are allowed to be unhurried. Land
-on "a few hundred small losses" and stop for a beat before the cut.
+Slow. This is the only part of the video where you get to take your time. Land
+on "one at a time" and stop for a beat.
 
-## B. 0:24 — The decision
+## B. 0:24 — The clock
 
-*Cut to the home page. The headline says "You have four minutes."*
+*The home page. The headline says "You have four minutes."*
 
-> **And now somebody has about four minutes to decide. Move traffic off that
-> bank, wait it out, or overreact and make a bad day worse.**
+> **By the time someone notices, you've got about four minutes to decide. Move
+> the traffic? Wait it out? Or panic, and make a bad day worse.**
 
-Three options, three slightly different intonations. Do not rush the list.
+Three questions, three different tones. Don't rush them together.
 
-## C. 0:36 — Name it
+## C. 0:36 — Who you are
 
-*The five step loop scrolls: observe, reason, decide, guard, prove.*
+*The five step loop scrolls past.*
 
-> **I am Balaji. I built Flowstate for that four minutes. It finds the route
-> that is failing, takes one bounded action, and then proves whether the action
-> recovered anything.**
+> **I'm Balaji, and I built Flowstate for those four minutes. It spots the route
+> that's failing, does one small thing about it, and then proves whether that
+> actually helped.**
 
-"Proves" is the word the rest of the film pays off. Lean on it.
+"Proves" is the promise the rest of the video keeps. Hit it.
 
-## D. 0:49 — The thesis
+## D. 0:49 — The whole idea
 
-*The instrument, close. Two traces. Watch them separate.*
+*The instrument. Two lines. Watch them split apart.*
 
-> **This is the whole idea in one picture. The solid line is live traffic. The
-> dashed line is a holdout that never receives the fix. When the bank breaks,
-> both fall. After the response, only one comes back. That gap is the
-> recovery.**
+> **This is the whole idea in one picture. The solid line is your live traffic.
+> The dashed line is a small group we deliberately don't fix. The bank breaks,
+> and both drop. We act, and only one comes back. That gap? That's the money
+> you saved.**
 
-Time it so "that gap is the recovery" lands around **1:03**, when the two lines
-are furthest apart. The picture fades out under your last word.
+Say "that gap" around **1:03**, when the two lines are furthest apart. Pause
+before "that's the money you saved."
 
-## E. 1:08 — Start the demo
+## E. 1:08 — Start it
 
-*Fade in on the desk. The demo is running.*
+*The desk. The demo is running.*
 
-> **Here is the desk. I am starting the same simulated incident every time, so
-> nothing you are about to see is hand picked.**
+> **This is the desk. I'm starting the same simulated incident every time, so
+> nothing you're about to see was cherry picked.**
 
-Say "simulated" clearly. Volunteering it is worth more than being asked.
+Say "simulated" clearly. Volunteering it beats being asked.
 
-## F. 1:19 — Detection and choice
+## F. 1:19 — What it sees, and what it picks
 
-*The incident fills in. At 1:32 it cuts to route health, ICICI at the top.*
+*The incident fills in. At 1:32 it cuts to the route list.*
 
-> **ICICI Bank is declining. Sustained, not one bad minute. Flowstate ranks
-> only the responses it is allowed to take, and it scores doing nothing as a
-> real option. It picks the least disruptive thing that should work, and moves
-> traffic off the route.**
+> **ICICI is declining. Not one bad minute. A real, sustained drop. Flowstate
+> looks at what it's actually allowed to do, scores each option, including
+> doing nothing, and picks the gentlest thing that should work. It moves
+> traffic off that route.**
 
-Reach "ranks only the responses it is allowed to take" by about 1:30 so the cut
-to the route table lands under "least disruptive thing that should work".
+"Including doing nothing" is the bit people remember. Slow down on it.
 
-## G. 1:38 — The human boundary
+## G. 1:38 — Where it stops
 
-*The approval, waiting. Authorization, expiry, an approve and a deny button.*
+*The approval, waiting. Approve and deny buttons.*
 
-> **The circuit breaker is a different matter. It pulls a route out of customer
-> traffic, so it stops here and waits for a named person. If nobody answers, it
-> expires. Silence is never consent. That is the one line I did not want
-> automation to cross.**
+> **Now the bigger hammer. A circuit breaker pulls a bank out completely, so
+> Flowstate won't do that on its own. It stops, and it waits for a person. And
+> if nobody answers, it expires. Silence is never a yes. That's the line I
+> didn't want a machine crossing.**
 
-Drop your pace on "silence is never consent". It is the most quotable sentence
-in the pitch.
+Drop your voice on "silence is never a yes." It's the most quotable line you
+have.
 
-## H. 1:58 — The proof
+## H. 1:58 — Did it work
 
-*The measurement. Treated against holdout, the lift, the money. At 2:18 it cuts
-to the proof section on the home page.*
+*The measurement. Treated against holdout, then the proof section.*
 
-> **Now the question most tools avoid. Did it actually work? Flowstate
-> deliberately kept part of the affected traffic out of the fix. Treated
-> payments recovered to about ninety percent. The untreated control stayed near
-> six. That is the number on the right, recovered against a live control group,
-> and it only appears because the comparison is statistically significant. If
-> the sample is thin, it reports nothing at all.**
+> **So here's the question nobody likes answering. Did it work? Remember that
+> small group we left alone? Here they are, side by side. The fixed traffic
+> came back to around ninety percent. The untreated group stayed near six. That
+> number on the right is real money recovered, measured against a live control
+> group. And if the sample's too small to be sure, Flowstate says nothing at
+> all.**
 
-The longest beat, and the one that wins it. Do not speed up because it is long.
-Pause after "did it actually work?" and let the bars finish before you give the
-numbers. You have thirty seconds for sixty eight words, which is slow on
-purpose.
+Your longest beat and the one that wins it. Thirty seconds for sixty seven
+words, so you can breathe. Pause after "did it work?" and let the bars fill
+before you give the numbers.
 
-If you want to say the rupee figure out loud, read it off the screen. It moves
-between runs, which is why the script does not fix it.
+## I. 2:28 — The receipt
 
-## I. 2:28 — Credibility
+*The signed policy revision, then the two planes.*
 
-*The decision receipt, then the decision plane and the routing plane.*
+> **Every change leaves a receipt. Who did it, why, and when it expires.
+> Flowstate never touches your payment provider. It writes a policy, and your
+> router reads it.**
 
-> **Every change is a signed policy revision, with an author and an expiry.
-> Flowstate publishes policy. Your router reads it. It never touches a payment
-> at the provider.**
+Short sentences. Businesslike. The cut at 2:35 falls before the last two.
 
-Four short sentences, businesslike. The cut at 2:35 falls between the second and
-the third.
+**Once the advisor has quota**, swap `14-desk-receipt` back into the `receipt`
+beat in `cut/assemble.mjs` and use this instead. Same thirteen seconds, and it
+names the model while the assessment is on screen:
 
-**If the advisor is live**, use this instead. It fits the same 13 seconds and
-names the model lane, which is worth doing while the assessment is on screen:
+> **Every change leaves a receipt. Who did it, why, when it expires. And the
+> plain English summary next to it? A model wrote that. It has no tools. It
+> can't touch your routing.**
 
-> **Every change is a signed policy revision. The assessment beside it is
-> written by a model that holds no tools and cannot change routing. Flowstate
-> publishes policy; your router reads it.**
+## J. 2:41 — Land it
 
-That only works if the footage shows it. Set `GEMINI_API_KEY`, restart the API,
-then re-record the one shot and re-cut:
+*Back to the instrument. It breaks, and recovers, and holds on the gap.*
 
-```bash
-cd demo/capture && node record.mjs 14-desk-receipt 11-desk-decision 12-desk-measure 13-desk-routes 10-desk
-```
+> **The traffic here is simulated, on purpose, so anyone can run this and get
+> the same result. Point it at real routes and nothing changes. A safe
+> decision, a human where it matters, and proof of the money you got back.**
 
-## J. 2:41 — Close
-
-*Back to the instrument. It breaks, then recovers, and holds on the gap.*
-
-> **The traffic here is simulated on purpose, so the entire decision path is
-> reproducible. Point it at real routes and the loop does not change. A safe
-> decision, a person where it matters, and proof of the money you got back.**
-
-Stop talking on "got back" at about 2:58. The picture fades and the end card
-carries the last line in text. Do not add a sign off.
+Stop on "got back" around 2:58. The end card carries that line in text. No sign
+off, no thank you.
 
 ---
 
 ## Delivering it
 
-- 390 words over 2:54 is 134 words a minute. That is deliberately slower than
-  conversation. If you finish a beat early, hold the silence rather than filling
-  it.
+- 383 words over 2:54 is 132 words a minute, which is slower than you talk
+  normally. If you finish a beat early, hold the silence rather than filling it.
 - Record in one continuous pass with the film playing. Sit down, look at the
   lens, and let the cuts pace you.
 - The three numbers you need are **ninety**, **six**, and **four minutes**.
