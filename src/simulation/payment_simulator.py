@@ -496,7 +496,7 @@ class PaymentSimulator:
             'injected_at': datetime.now(),
             'expires_at': datetime.now() + timedelta(seconds=duration_seconds)
         }
-        print(f"🔥 Injected issuer degradation: {issuer} at {severity:.0%} severity for {duration_seconds}s")
+        print(f"Injected issuer degradation: {issuer} at {severity:.0%} severity for {duration_seconds}s")
     
     def inject_retry_storm(self, duration_seconds: int = 180):
         """Inject retry storm scenario"""
@@ -506,7 +506,7 @@ class PaymentSimulator:
             'injected_at': datetime.now(),
             'expires_at': datetime.now() + timedelta(seconds=duration_seconds)
         }
-        print(f"🔥 Injected retry storm for {duration_seconds}s")
+        print(f"Injected retry storm for {duration_seconds}s")
     
     def inject_method_fatigue(
         self,
@@ -523,7 +523,7 @@ class PaymentSimulator:
             'injected_at': datetime.now(),
             'expires_at': datetime.now() + timedelta(seconds=duration_seconds)
         }
-        print(f"🔥 Injected method fatigue: {method.value} at {severity:.0%} severity for {duration_seconds}s")
+        print(f"Injected method fatigue: {method.value} at {severity:.0%} severity for {duration_seconds}s")
     
     def inject_geographic_failure(
         self,
@@ -540,7 +540,7 @@ class PaymentSimulator:
             'injected_at': datetime.now(),
             'expires_at': datetime.now() + timedelta(seconds=duration_seconds)
         }
-        print(f"🔥 Injected geographic failure: {region} at {severity:.0%} severity for {duration_seconds}s")
+        print(f"Injected geographic failure: {region} at {severity:.0%} severity for {duration_seconds}s")
     
     def inject_latency_spike(
         self,
@@ -555,7 +555,7 @@ class PaymentSimulator:
             'injected_at': datetime.now(),
             'expires_at': datetime.now() + timedelta(seconds=duration_seconds)
         }
-        print(f"🔥 Injected latency spike: {multiplier}x for {duration_seconds}s")
+        print(f"Injected latency spike: {multiplier}x for {duration_seconds}s")
     
     def active_scenarios(self) -> List[Dict]:
         """
@@ -583,7 +583,7 @@ class PaymentSimulator:
 
         for scenario_id in expired:
             scenario = self.failure_scenarios[scenario_id]
-            print(f"✅ Scenario expired: {scenario['type']}")
+            print(f"Scenario expired: {scenario['type']}")
             del self.failure_scenarios[scenario_id]
 
     def get_active_scenarios(self) -> List[Dict]:

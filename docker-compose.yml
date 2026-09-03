@@ -21,8 +21,11 @@ services:
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     environment:
       - PYTHONPATH=/app
-      # Optional: forwarded from the local shell for the read-only Razorpay test-mode source.
-      # Do not commit credentials or expose them to the frontend.
+      # Optional, forwarded from the local shell. Do not commit credentials or
+      # expose them to the frontend.
+      # Written commentary on incidents; the agent runs without it if unset.
+      - GEMINI_API_KEY
+      # Read-only Razorpay test-mode source.
       - RAZORPAY_TEST_KEY_ID
       - RAZORPAY_TEST_KEY_SECRET
       - RAZORPAY_MERCHANT_ID

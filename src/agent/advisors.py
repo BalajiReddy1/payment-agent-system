@@ -23,7 +23,7 @@ model cannot be reached, and the agent simply runs without commentary.
 
 import logging
 import os
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -87,11 +87,17 @@ def format_incident_brief(context: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# Availability, not correctness. A busy model should cost the assessment its
+# wording, not its existence, so these are retried against the next candidate.
+TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
+
+
 def build_advisor(
-    model: str = "gemini-2.5-flash",
+    model: str = "gemini-3.6-flash",
     temperature: float = 0.2,
     client_factory: Optional[Callable[[], Any]] = None,
     max_chars: int = 600,
+    fallbacks: Sequence[str] = (),
 ) -> Optional[Callable[[Dict[str, Any]], str]]:
     """
     Build the advisor callable the agent invokes once per incident.
@@ -103,6 +109,9 @@ def build_advisor(
             and the response handling can be exercised without a network call.
         max_chars: Assessments are shown inline on an incident card, so an
             essay is worse than a sentence.
+        fallbacks: Models to try, in order, when the primary is temporarily
+            unavailable. A flagship model under load returns 503 often enough
+            that a demo relying on one has a visible failure mode.
 
     Returns:
         A callable(context) -> str, or None when no model is reachable. The
@@ -113,14 +122,69 @@ def build_advisor(
         if client_factory is None:
             return None
 
+    candidates = [model, *fallbacks]
+
     def advise(context: Dict[str, Any]) -> str:
         client = client_factory()
         prompt = format_incident_brief(context)
-        text = _generate(client, model, temperature, prompt)
-        text = " ".join(text.split())
-        return text[:max_chars] if len(text) > max_chars else text
+        text, answered = _generate_from(client, candidates, temperature, prompt)
+        # The desk names the model that actually wrote the assessment, which is
+        # not always the one that was asked first.
+        advise.model = answered
+        return _fit(" ".join(text.split()), max_chars)
 
+    # Readable before the first call, so the read model can report the lane
+    # even on an agent that has not seen an incident yet.
+    advise.model = model
     return advise
+
+
+def _fit(text: str, max_chars: int) -> str:
+    """
+    Trim to length without ending mid-word.
+
+    A model asked for three sentences sometimes writes three long ones. Cutting
+    on a character count leaves an operator reading a severed word, which looks
+    like a bug in the desk rather than a length limit. Prefer the last complete
+    sentence; fall back to the last whole word with an ellipsis.
+    """
+    if len(text) <= max_chars:
+        return text
+
+    window = text[:max_chars]
+    sentence = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+    if sentence >= max_chars * 0.6:
+        return window[: sentence + 1]
+
+    # The ellipsis comes out of the budget, so max_chars stays a hard ceiling.
+    trimmed = text[: max(0, max_chars - 3)]
+    word = trimmed.rfind(" ")
+    return (trimmed[:word] if word > 0 else trimmed).rstrip(" ,;:") + "..."
+
+
+def _generate_from(
+    client: Any,
+    candidates: Sequence[str],
+    temperature: float,
+    prompt: str,
+) -> tuple[str, str]:
+    """
+    Ask each candidate in turn, moving on only when one is unavailable.
+
+    A bad key, a malformed request or a content refusal is raised immediately:
+    those will fail identically on every model, and quietly trying three more
+    would turn one clear error into a slow, confusing one.
+    """
+    last: Exception | None = None
+    for name in candidates:
+        try:
+            return _generate(client, name, temperature, prompt), name
+        except Exception as exc:
+            if getattr(exc, "code", None) not in TRANSIENT_STATUS:
+                raise
+            logger.info("Advisor model %s is unavailable (%s); trying the next", name, getattr(exc, "code", "?"))
+            last = exc
+    raise last if last else RuntimeError("no advisor model was configured")
 
 
 def _default_client_factory() -> Optional[Callable[[], Any]]:

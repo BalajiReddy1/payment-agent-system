@@ -1,0 +1,85 @@
+/*
+  Flowstate design tokens.
+
+  Voice: steady, exacting, unhurried. The reference object is a night-shift
+  instrument panel, not a SaaS dashboard.
+
+  Colour strategy is Committed and semantic, not decorative:
+    signal (vermillion)  = something is wrong and wants a hand
+    proof  (aqua)        = something was measured and held up
+  The whole product is the move from signal to proof, so the palette says it.
+*/
+
+:root {
+  color-scheme: dark;
+
+  /* Surface ramp: near-black carrying a faint cool tint, never pure #000. */
+  --bg: oklch(0.152 0.008 178);
+  --bg-lift: oklch(0.186 0.009 178);
+  --surface: oklch(0.216 0.01 178);
+  --surface-2: oklch(0.252 0.011 178);
+  --line: oklch(0.302 0.012 178);
+  --line-soft: oklch(0.244 0.01 178);
+
+  /* Ink ramp. --ink-3 is 7.0:1 on --bg; --ink-4, the quietest label tone, is 5.3:1. */
+  --ink: oklch(0.972 0.005 178);
+  --ink-2: oklch(0.845 0.008 178);
+  --ink-3: oklch(0.722 0.01 178);
+  --ink-4: oklch(0.632 0.011 178);
+
+  /* Signal. 4.7:1 on --bg, so it is legible as text, not only as decoration. */
+  --signal: oklch(0.7 0.192 40);
+  --signal-hi: oklch(0.775 0.158 48);
+  --signal-wash: oklch(0.7 0.192 40 / 0.12);
+  --signal-edge: oklch(0.7 0.192 40 / 0.4);
+
+  /* Proof. 9.1:1 on --bg. */
+  --proof: oklch(0.845 0.135 178);
+  --proof-wash: oklch(0.845 0.135 178 / 0.11);
+  --proof-edge: oklch(0.845 0.135 178 / 0.36);
+
+  /* Text that sits on a solid signal or proof fill. */
+  --on-fill: oklch(0.145 0.014 40);
+
+  --font-sans: var(--font-familjen), "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Type scale, 1.28 ratio, fluid where it matters. */
+  --t-display: clamp(3.05rem, 1.55rem + 6vw, 5.75rem);
+  --t-h1: clamp(2.55rem, 1.5rem + 4.2vw, 4.5rem);
+  --t-h2: clamp(2rem, 1.35rem + 2.6vw, 3.25rem);
+  --t-h3: clamp(1.4rem, 1.15rem + 1vw, 1.85rem);
+  --t-lead: clamp(1.0625rem, 1rem + 0.35vw, 1.25rem);
+  --t-body: 0.9375rem;
+  --t-small: 0.8125rem;
+  --t-micro: 0.6875rem;
+
+  /* Sharp by default. This brand is a certificate, not a pill. */
+  --r-1: 2px;
+  --r-2: 4px;
+  --r-3: 10px;
+  --r-round: 999px;
+
+  --gutter: clamp(1.25rem, 4vw, 3rem);
+  --measure: 68ch;
+  --shell: 1280px;
+  --shell-tight: 980px;
+
+  --band: clamp(5rem, 11vh + 3rem, 9.5rem);
+
+  /* Exponential ease-out only. No bounce, no elastic. */
+  --e-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --e-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --e-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --d-1: 140ms;
+  --d-2: 240ms;
+  --d-3: 420ms;
+  --d-4: 760ms;
+
+  --z-raise: 10;
+  --z-sticky: 100;
+  --z-nav: 200;
+  --z-backdrop: 300;
+  --z-modal: 400;
+  --z-toast: 500;
+}

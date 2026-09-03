@@ -126,7 +126,8 @@ class AdvisorSettings:
     """
 
     enabled: bool = True
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3.6-flash"
+    fallbacks: List[str] = field(default_factory=lambda: ["gemini-3.5-flash"])
     temperature: float = 0.2
     max_chars: int = 600
 
@@ -220,6 +221,7 @@ class Settings:
 
         _assign(self.advisor, {
             'enabled': get_config_value(config, 'advisor.enabled'),
+            'fallbacks': get_config_value(config, 'advisor.fallbacks'),
             'model': get_config_value(config, 'advisor.model'),
             'temperature': get_config_value(config, 'advisor.temperature'),
             'max_chars': get_config_value(config, 'advisor.max_chars'),

@@ -11,12 +11,43 @@ response was chosen, what required approval, and whether it actually helped.
 ## What to see first
 
 1. Start the product and open `http://localhost:3000`.
-2. Select **Run demo**.
-3. Watch the incident appear, the routing response be evaluated, and the
+2. Select **Open the recovery desk**.
+3. Select **Run demo**.
+4. Watch the incident appear, the routing response be evaluated, and the
    recovery result populate against the control group.
 
 The demonstration is deterministic, so the same scenario and measurement are
 reproducible for a review or recorded walkthrough.
+
+| Page | Purpose |
+| --- | --- |
+| `/` | What Flowstate does, the operating loop, and the measurement claim |
+| `/onboarding` | First run: source, blast radius, approver, holdout size |
+| `/desk` | The live recovery desk |
+
+Setup is stored in the browser only. The desk runs on its own defaults if you
+skip it.
+
+The pitch script is in [PRESENTATION.md](PRESENTATION.md), and the tooling that
+records the product footage and cuts the video is in [demo/](demo/).
+
+## The two lanes
+
+The deterministic lane detects, ranks and acts. It owns every decision that can
+reach customer traffic, and it is the only lane the guardrails, the approval
+queue and the holdout measurement apply to.
+
+The advisor lane writes the assessment a human reads on an incident. It runs
+once per incident, is given **no tools**, and cannot change routing. A second
+path to alter payments, arrived at by a component whose job was to write a
+sentence, is the failure mode the split exists to prevent.
+
+To turn the advisor on, copy `.env.example` to `.env` and set `GEMINI_API_KEY`
+(one is free at https://aistudio.google.com/apikey), then restart the API. The
+desk names the lane that wrote each assessment, so an operator never has to
+guess. Without a key the agent still detects, decides, guards and measures, and
+the desk says the advisor is off rather than passing detector output off as
+model output.
 
 ## System architecture
 

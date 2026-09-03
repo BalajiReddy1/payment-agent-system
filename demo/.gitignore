@@ -1,0 +1,4 @@
+# Generated footage, cards and cuts. Large binaries, reproducible from source.
+out/
+in/
+node_modules/

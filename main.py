@@ -135,7 +135,7 @@ def run_demo_scenario(journal=None):
             
             for pattern in results['patterns_detected']:
                 if pattern['type'] == 'retry_storm':
-                    print(f"  🔴 RETRY STORM DETECTED!")
+                    print(f"  RETRY STORM DETECTED!")
                     print(f"     {pattern['description']}")
             
             for action in results['actions_taken']:

@@ -95,14 +95,21 @@ control_plane:
 # acceptable.
 advisor:
   enabled: true
-  model: gemini-2.5-flash
+  model: gemini-3.6-flash
+
+  # Tried in order when the primary is temporarily unavailable. A flagship
+  # model under load returns 503 often enough that relying on one alone is a
+  # visible failure mode during a demo. The desk names whichever answered.
+  fallbacks:
+    - gemini-3.5-flash
 
   # Low on purpose: this is an explanation, not a brainstorm.
   temperature: 0.2
 
   # Assessments render inline on an incident card, so an essay is worse
-  # than a sentence.
-  max_chars: 600
+  # than a sentence. Trimming falls back to the last complete sentence, so
+  # this is a ceiling rather than an exact cut.
+  max_chars: 800
 
 # Logging
 logging:
