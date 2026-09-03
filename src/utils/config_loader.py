@@ -106,20 +106,20 @@ if __name__ == '__main__':
     
     try:
         agent_config = load_agent_config()
-        print(f"✅ Agent config loaded: {len(agent_config)} sections")
+        print(f"Agent config loaded: {len(agent_config)} sections")
         
         safety_rules = load_safety_rules()
-        print(f"✅ Safety rules loaded: {len(safety_rules)} sections")
+        print(f"Safety rules loaded: {len(safety_rules)} sections")
         
         sim_config = load_simulation_config()
-        print(f"✅ Simulation config loaded: {len(sim_config)} sections")
+        print(f"Simulation config loaded: {len(sim_config)} sections")
         
         # Test nested access
         window_size = get_agent_setting('agent.window_size_minutes', 10)
-        print(f"✅ Agent window size: {window_size} minutes")
+        print(f"Agent window size: {window_size} minutes")
         
         max_actions = get_safety_limit('limits.max_actions_per_hour', 10)
-        print(f"✅ Max actions per hour: {max_actions}")
+        print(f"Max actions per hour: {max_actions}")
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")

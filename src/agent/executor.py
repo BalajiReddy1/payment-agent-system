@@ -328,7 +328,7 @@ class PaymentExecutor:
         self.logger.warning(alert_message)
         
         # Simulate sending alert
-        print(f"\n🚨 {alert_message}\n")
+        print(f"\n{alert_message}\n")
         
         return True, "Alert sent to ops team"
     

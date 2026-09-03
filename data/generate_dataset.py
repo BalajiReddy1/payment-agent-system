@@ -108,7 +108,7 @@ def main():
     json_path = Path(__file__).parent / 'sample_payments.json'
     with open(json_path, 'w') as f:
         json.dump(transactions, f, indent=2)
-    print(f"📁 JSON saved to: {json_path}")
+    print(f"JSON saved to: {json_path}")
     
     # Save to CSV
     csv_path = Path(__file__).parent / 'sample_payments.csv'
@@ -116,11 +116,11 @@ def main():
         writer = csv.DictWriter(f, fieldnames=transactions[0].keys())
         writer.writeheader()
         writer.writerows(transactions)
-    print(f"📁 CSV saved to: {csv_path}")
+    print(f"CSV saved to: {csv_path}")
     
     # Print summary
     success_count = sum(1 for t in transactions if t['status'] == 'SUCCESS')
-    print(f"\n✅ Generated {len(transactions)} transactions")
+    print(f"\nGenerated {len(transactions)} transactions")
     print(f"\nDataset Summary:")
     print(f"  Total Transactions: {len(transactions)}")
     print(f"  Success Rate: {success_count/len(transactions):.1%}")
