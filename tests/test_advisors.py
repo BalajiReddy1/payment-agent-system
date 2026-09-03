@@ -314,3 +314,173 @@ def test_a_provider_outage_degrades_the_narrative_and_not_the_mitigation():
 
     assert agent.state.actions_executed > 0
     assert not agent.state.control_plane.current.is_empty()
+
+
+def test_the_snapshot_names_the_lane_that_wrote_the_assessment():
+    """
+    An operator reading an incident is entitled to know whether a model or the
+    detector said it. The desk renders that attribution, so the read model has
+    to carry it rather than leaving the UI to guess.
+    """
+    from src import views
+
+    client = FakeClient(reply='Authorisations on this issuer are failing.')
+    advised = build_agent(
+        window_size_minutes=5,
+        advisor=build_advisor(model='gemini-2.5-flash', client_factory=lambda: client),
+    )
+    assert views.snapshot(advised)['agent']['advisor'] is True
+    assert views.snapshot(advised)['agent']['advisor_model'] == 'gemini-2.5-flash'
+
+    with no_api_key():
+        bare = build_agent(window_size_minutes=5)
+    assert views.snapshot(bare)['agent']['advisor'] is False
+    assert views.snapshot(bare)['agent']['advisor_model'] is None
+
+
+class _Unavailable(Exception):
+    """Shaped like the SDK's error: availability is signalled by `code`."""
+
+    def __init__(self, code):
+        super().__init__(f"{code} UNAVAILABLE")
+        self.code = code
+
+
+class FlakyClient:
+    """Fails the first N models with a transient status, then answers."""
+
+    def __init__(self, unavailable, reply='It recovered.'):
+        self.unavailable = set(unavailable)
+        self.reply = reply
+        self.asked = []
+
+    class _Models:
+        def __init__(self, outer):
+            self.outer = outer
+
+        def generate_content(self, model, contents, **kwargs):
+            self.outer.asked.append(model)
+            if model in self.outer.unavailable:
+                raise _Unavailable(503)
+            return type('R', (), {'text': self.outer.reply})()
+
+    @property
+    def models(self):
+        return self._Models(self)
+
+
+def test_an_overloaded_model_falls_through_to_the_next():
+    """
+    A flagship model under load returns 503. That should cost the assessment
+    its wording, not its existence.
+    """
+    client = FlakyClient(unavailable={'gemini-3.6-flash'})
+    advise = build_advisor(
+        model='gemini-3.6-flash',
+        fallbacks=['gemini-3.5-flash'],
+        client_factory=lambda: client,
+    )
+
+    assert advise({'incident_id': 'inc-1'}) == 'It recovered.'
+    assert client.asked == ['gemini-3.6-flash', 'gemini-3.5-flash']
+
+
+def test_the_model_that_answered_is_the_one_reported():
+    """The desk attributes the assessment, so it must name the right model."""
+    client = FlakyClient(unavailable={'gemini-3.6-flash'})
+    advise = build_advisor(
+        model='gemini-3.6-flash',
+        fallbacks=['gemini-3.5-flash'],
+        client_factory=lambda: client,
+    )
+
+    assert advise.model == 'gemini-3.6-flash', 'the primary before any call'
+    advise({'incident_id': 'inc-1'})
+    assert advise.model == 'gemini-3.5-flash', 'whichever actually answered'
+
+
+def test_a_bad_key_is_raised_at_once_rather_than_retried_across_models():
+    """
+    An error that will fail identically everywhere must not be turned into a
+    slow one by trying three more models.
+    """
+    asked = []
+
+    class Rejecting:
+        class _Models:
+            def generate_content(self, model, **kwargs):
+                asked.append(model)
+                raise _Unavailable(400)
+
+        models = _Models()
+
+    advise = build_advisor(
+        model='gemini-3.6-flash',
+        fallbacks=['gemini-3.5-flash', 'gemini-flash-latest'],
+        client_factory=Rejecting,
+    )
+
+    try:
+        advise({'incident_id': 'inc-1'})
+    except _Unavailable as exc:
+        assert exc.code == 400
+    else:
+        raise AssertionError('a 400 should not have been swallowed')
+
+    assert asked == ['gemini-3.6-flash'], 'only the first model should be asked'
+
+
+def test_a_long_assessment_is_trimmed_to_a_whole_sentence():
+    """
+    A severed word looks like a bug in the desk rather than a length limit.
+    """
+    client = FakeClient(reply=(
+        'ICICI Bank is degrading badly. The evidence cannot yet separate an outage '
+        'from throttling. Watch the raw decline codes to tell them apart.'
+    ))
+    advise = build_advisor(client_factory=lambda: client, max_chars=100)
+
+    assessment = advise({'incident_id': 'inc-1'})
+    assert assessment == 'ICICI Bank is degrading badly. The evidence cannot yet separate an outage from throttling.'
+    assert len(assessment) <= 100
+
+
+def test_a_single_endless_sentence_falls_back_to_a_whole_word():
+    client = FakeClient(reply='word ' * 200)
+    advise = build_advisor(client_factory=lambda: client, max_chars=52)
+
+    assessment = advise({'incident_id': 'inc-1'})
+    assert assessment.endswith('...')
+    assert 'wor...' not in assessment, 'must not cut inside a word'
+    assert len(assessment) <= 52
+
+
+def test_an_unreachable_model_is_recorded_on_the_incident_not_just_logged():
+    """
+    An operator looking at an incident with no assessment should be told the
+    model could not be reached, not left to assume the lane had nothing to say.
+    """
+    from datetime import datetime
+
+    class Exhausted:
+        class _Models:
+            def generate_content(self, **kwargs):
+                raise _Unavailable(429)
+
+        models = _Models()
+
+    agent = build_agent(
+        window_size_minutes=5,
+        advisor=build_advisor(fallbacks=[], client_factory=Exhausted),
+    )
+    simulator = build_simulator(control_plane=agent.state)
+    simulator.inject_issuer_degradation('SBI', severity=0.9, duration_seconds=3600)
+
+    for _ in range(3):
+        agent.process_batch(simulator.generate_stream(count=300, start_time=datetime.now()))
+        agent.run_cycle()
+
+    incidents = agent.incident_tracker.all()
+    assert incidents, 'the degradation should have opened an incident'
+    assert all(i.advice is None for i in incidents)
+    assert any(i.advice_unavailable == 'Quota exhausted for the configured models.' for i in incidents)

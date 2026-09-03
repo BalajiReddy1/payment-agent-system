@@ -45,6 +45,11 @@ class Incident:
     actions_taken: List[str] = field(default_factory=list)
     advice: Optional[str] = None
 
+    # Why there is no advice, when there is none. An empty assessment because
+    # the model was unreachable is a different thing from one the advisor has
+    # simply not reached yet, and the desk has to be able to say which.
+    advice_unavailable: Optional[str] = None
+
     @property
     def active(self) -> bool:
         return self.closed_at is None
@@ -69,6 +74,7 @@ class Incident:
             'duration_seconds': round(self.duration_seconds, 1),
             'actions_taken': list(self.actions_taken),
             'advice': self.advice,
+            'advice_unavailable': self.advice_unavailable,
         }
 
 

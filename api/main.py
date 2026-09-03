@@ -21,7 +21,11 @@ from src import views
 from src.agent.core import PaymentAgent
 from src.models.state import PaymentMethod, PaymentStatus, PaymentTransaction
 from src.runtime import AgentRuntime
+from src.utils.env import load_env_file
 
+# Before anything reads os.environ. Provider keys stay on this service; the
+# browser never sees them and the frontend proxies through us.
+load_env_file(project_root / ".env")
 
 runtime = AgentRuntime()
 

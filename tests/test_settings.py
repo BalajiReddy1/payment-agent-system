@@ -7,6 +7,7 @@ the wiring in place: the files are loaded, they reach the components that use
 them, and a dangerous mistake in them stops startup rather than passing through.
 """
 
+import os
 import textwrap
 
 import pytest
@@ -204,3 +205,38 @@ def test_simulator_accepts_agent_state_control_plane_or_revision():
 def test_overrides_win_over_config():
     agent = build_agent(window_size_minutes=1)
     assert agent.observer.window_size.total_seconds() == 60
+
+
+def test_env_file_fills_gaps_without_overriding_the_real_environment(tmp_path, monkeypatch):
+    """
+    A key exported in the shell, injected by a container runtime, or handed
+    over by a secret manager is authoritative. The file only fills gaps.
+    """
+    from src.utils.env import load_env_file
+
+    env = tmp_path / '.env'
+    env.write_text(
+        '# a comment\n'
+        '\n'
+        'export FLOWSTATE_FROM_FILE="written"\n'
+        "FLOWSTATE_QUOTED='also written'\n"
+        'FLOWSTATE_ALREADY_SET=ignored\n'
+        'not-a-pair\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('FLOWSTATE_ALREADY_SET', 'from the shell')
+    monkeypatch.delenv('FLOWSTATE_FROM_FILE', raising=False)
+    monkeypatch.delenv('FLOWSTATE_QUOTED', raising=False)
+
+    applied = load_env_file(env)
+
+    assert os.environ['FLOWSTATE_FROM_FILE'] == 'written'
+    assert os.environ['FLOWSTATE_QUOTED'] == 'also written'
+    assert os.environ['FLOWSTATE_ALREADY_SET'] == 'from the shell'
+    assert 'FLOWSTATE_ALREADY_SET' not in applied
+
+
+def test_a_missing_env_file_is_not_an_error(tmp_path):
+    from src.utils.env import load_env_file
+
+    assert load_env_file(tmp_path / 'nothing-here') == []

@@ -134,6 +134,7 @@ def _advisor_for(settings: Settings):
 
     advisor = build_advisor(
         model=settings.advisor.model,
+        fallbacks=settings.advisor.fallbacks,
         temperature=settings.advisor.temperature,
         max_chars=settings.advisor.max_chars,
     )

@@ -30,6 +30,24 @@ from src.safety.approvals import ApprovalQueue, needs_human
 from src.store.journal import NullJournal
 
 
+def _advisor_failure(exc: Exception) -> str:
+    """
+    A short, operator-readable reason an assessment is missing.
+
+    Provider errors arrive as several hundred characters of JSON. What an
+    operator needs is which of three things happened: the quota is gone, the
+    model is busy, or something else went wrong.
+    """
+    code = getattr(exc, "code", None)
+    if code == 429:
+        return "Quota exhausted for the configured models."
+    if code in (500, 502, 503, 504):
+        return "The model was busy and did not answer in time."
+    if code == 400:
+        return "The advisor was rejected by the provider. Check the API key."
+    return "The advisor could not be reached."
+
+
 class PaymentAgent:
     """
     Autonomous payment operations agent.
@@ -589,7 +607,12 @@ class PaymentAgent:
 
         try:
             incident.advice = self.advisor(context)
+            incident.advice_unavailable = None
         except Exception as exc:
+            # Recorded, not just logged: an operator looking at an incident with
+            # no assessment should be told the model could not be reached rather
+            # than left to assume the lane had nothing to say.
+            incident.advice_unavailable = _advisor_failure(exc)
             self.logger.warning(
                 "Advisor failed for %s (continuing without it): %s",
                 incident.incident_id, exc

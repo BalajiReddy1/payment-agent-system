@@ -57,6 +57,10 @@ def snapshot(
             'cycle': status['cycle_count'],
             'phase': phase(agent),
             'window_minutes': summary.get('window_size_minutes'),
+            # Which lane wrote the assessments. An operator reading an incident
+            # is entitled to know whether a model or the detector said it.
+            'advisor': agent.advisor is not None,
+            'advisor_model': getattr(agent.advisor, 'model', None),
         },
         'metrics': {
             'success_rate': summary.get('overall_success_rate', 0),

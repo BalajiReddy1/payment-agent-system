@@ -120,6 +120,14 @@ The optional advisor in `src/agent/advisors.py` explains an incident for the
 operator. It has no tools and cannot alter the decision path. If unavailable,
 the detection, policy, and measurement loop continue unchanged.
 
+It is enabled by `GEMINI_API_KEY` on the API service, read from the environment
+or from a local `.env` by `src/utils/env.py`; a value already exported always
+wins over the file. The key never reaches the browser, which talks only to the
+Next.js proxy. `views.snapshot` reports `agent.advisor` and
+`agent.advisor_model`, and the desk uses them to attribute each assessment, so a
+missing or failing model is visible rather than silently indistinguishable from
+detector output.
+
 ## Known boundary
 
 The shipped demonstration uses synthetic traffic. Its purpose is to make the
